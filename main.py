@@ -9,7 +9,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.event.filter import EventMessageType
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.core.message.components import Image, Node, Nodes
+from astrbot.core.message.components import Image, Forward
 
 from .database import Database
 
@@ -228,53 +228,144 @@ class CollectImagePlugin(Star):
         sender_id = event.get_sender_id()
 
         messages = event.get_messages()
+        logger.info(f"[CollectImage] 消息链: 共{len(messages)}条, 类型={[type(m).__name__ for m in messages]}")
         
         for i, msg in enumerate(messages):
+            msg_type = type(msg).__name__
             # 处理普通图片
             if isinstance(msg, Image):
                 await self._process_single_image(msg, event, group_id, sender_id, i)
             
-            # 处理合并转发消息
-            elif isinstance(msg, Node):
-                await self._process_forward_node(msg, event, group_id, sender_id)
+            # 处理合并转发消息 (Forward 类型)
+            elif isinstance(msg, Forward):
+                logger.info(f"[CollectImage] 检测到Forward: id={msg.id}")
+                await self._process_forward_message(msg.id, event, group_id, sender_id)
             
-            elif isinstance(msg, Nodes):
-                for node in msg.nodes:
-                    await self._process_forward_node(node, event, group_id, sender_id)
-
-    async def _process_forward_node(self, node: Node, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
-        """处理合并转发消息节点"""
-        # 情况1: Node 有 id 字段，需要调用 API 获取实际内容
-        if node.id:
-            forward_id = node.id
-            bot = getattr(event, 'bot', None)
-            if bot and hasattr(bot, 'api'):
-                try:
-                    result = await bot.api.call_action('get_forward_msg', id=str(forward_id))
-                    messages = result.get('messages', []) if isinstance(result, dict) else []
-                except Exception as e:
-                    logger.error(f"[CollectImage] 获取转发消息失败: {e}")
-                    return
             else:
-                logger.warning("[CollectImage] 无法获取 bot 对象，跳过转发消息")
-                return
-        else:
-            # 情况2: Node 已有 content 内容
-            messages = [{'message': node.content}]
+                logger.info(f"[CollectImage] 未处理的消息类型: {msg_type}")
 
-        # 解析消息节点，提取图片
-        for msg_item in messages:
-            message_content = msg_item.get('message', [])
-            if not isinstance(message_content, list):
-                continue
-            for segment in message_content:
-                if isinstance(segment, Image):
-                    await self._process_single_image(segment, event, group_id, sender_id, 0)
-                elif isinstance(segment, Node):
-                    await self._process_forward_node(segment, event, group_id, sender_id)
-                elif isinstance(segment, Nodes):
-                    for n in segment.nodes:
-                        await self._process_forward_node(n, event, group_id, sender_id)
+    async def _process_forward_message(self, forward_id, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
+        """处理合并转发消息，通过API获取内容"""
+        if not forward_id:
+            logger.warning("[CollectImage] 转发消息无ID")
+            return
+        
+        bot = getattr(event, 'bot', None)
+        if not bot or not hasattr(bot, 'api'):
+            logger.warning("[CollectImage] 无法获取 bot 对象")
+            return
+        
+        try:
+            logger.info(f"[CollectImage] 调用 get_forward_msg API, id={forward_id}")
+            result = await bot.api.call_action('get_forward_msg', id=str(forward_id))
+            logger.info(f"[CollectImage] get_forward_msg 返回: {result}")
+            
+            if not isinstance(result, dict):
+                logger.warning(f"[CollectImage] API返回格式错误: {type(result)}")
+                return
+            
+            messages = result.get('messages', [])
+            if not messages:
+                logger.warning("[CollectImage] 转发消息为空")
+                return
+            
+            logger.info(f"[CollectImage] 转发消息包含 {len(messages)} 个节点")
+            
+            # 解析每个节点的消息
+            for msg_item in messages:
+                message_content = msg_item.get('message', [])
+                if not isinstance(message_content, list):
+                    continue
+                
+                logger.info(f"[CollectImage] 节点消息内容: {message_content}")
+                
+                for segment in message_content:
+                    seg_type = type(segment).__name__
+                    
+                    if isinstance(segment, Image):
+                        await self._process_single_image(segment, event, group_id, sender_id, 0)
+                    elif isinstance(segment, dict) and segment.get('type') == 'image':
+                        # 字典格式的图片消息段
+                        file_data = segment.get('data', {})
+                        file_url = file_data.get('url') or file_data.get('file', '')
+                        if file_url:
+                            await self._process_image_by_url(file_url, event, group_id, sender_id)
+        
+        except Exception as e:
+            logger.error(f"[CollectImage] 处理转发消息失败: {e}")
+
+    async def _process_image_by_url(self, image_url: str, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
+        """通过URL处理图片（用于转发消息中的图片）"""
+        import aiohttp
+        import uuid
+        
+        logger.info(f"[CollectImage] 通过URL处理图片: {image_url}")
+        
+        try:
+            # 下载图片
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url) as resp:
+                    if resp.status != 200:
+                        logger.error(f"[CollectImage] 下载图片失败: {resp.status}")
+                        return
+                    
+                    image_data = await resp.read()
+            
+            # 保存图片
+            timestamp = int(time.time())
+            file_ext = ".jpg"
+            image_filename = f"{timestamp}_{group_id}_{sender_id}_{uuid.uuid4().hex[:8]}{file_ext}"
+            image_path = os.path.join(self.images_dir, image_filename)
+            
+            with open(image_path, 'wb') as f:
+                f.write(image_data)
+            
+            logger.info(f"[CollectImage] 图片已保存: {image_path}")
+            
+            # 计算哈希
+            file_hash = self._calculate_hash(image_path)
+            
+            if self.db.is_hash_exists(file_hash):
+                logger.info("[CollectImage] 图片已存在，跳过")
+                return
+            
+            # 检查图片尺寸
+            if not self._check_image_size(image_path):
+                logger.info("[CollectImage] 图片尺寸过小，跳过")
+                return
+            
+            # VLM 分析
+            result = await self.analyze_image(image_url, event)
+            
+            if result.get("filter_result") != "有效":
+                logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
+                return
+            
+            # AnimeTrace 识别
+            char_result = await self.recognize_character(image_url)
+            all_results = char_result.get("all_results", [])
+            ai_detect = char_result.get("ai_detect", "")
+            
+            person_count = len(all_results)
+            character = self._extract_characters(all_results)
+            ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
+            
+            self.db.insert_image(
+                file_hash=file_hash,
+                file_path=image_path,
+                file_name=image_filename,
+                group_id=str(group_id),
+                sender_id=str(sender_id),
+                timestamp=timestamp,
+                tags=result.get("tags"),
+                character=character,
+                description=result.get("description"),
+                ai_detect=ai_detect,
+            )
+            logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect}")
+            
+        except Exception as e:
+            logger.error(f"[CollectImage] 处理URL图片失败: {e}")
 
     async def _process_single_image(self, msg: Image, event: AstrMessageEvent, group_id: str, sender_id: str, img_index: int = 0) -> None:
         """处理单张图片的完整流程"""
