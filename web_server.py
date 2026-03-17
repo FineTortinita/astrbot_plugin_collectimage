@@ -46,6 +46,7 @@ class WebServer:
         self.app.router.add_put("/api/images/{image_id}", self.handle_update_image)
         self.app.router.add_delete("/api/images/{image_id}", self.handle_delete_image)
         self.app.router.add_post("/api/images/{image_id}/reanalyze", self.handle_reanalyze)
+        self.app.router.add_post("/api/images/{image_id}/recognize_character", self.handle_recognize_character)
 
         self.app.router.add_get("/api/stats", self.handle_get_stats)
         self.app.router.add_get("/api/health", self.handle_health_check)
@@ -226,6 +227,27 @@ class WebServer:
             return self._ok({"result": result})
         except Exception as e:
             return self._err(f"重新分析失败: {e}")
+
+    async def handle_recognize_character(self, request: web.Request) -> web.Response:
+        image_id = int(request.match_info["image_id"])
+        image = self.plugin.db.get_image_by_id(image_id)
+        if not image:
+            return self._err("图片不存在", 404)
+        
+        image_url = image.get("file_path")
+        if not image_url:
+            return self._err("图片路径不存在", 404)
+        
+        try:
+            # 使用 file:// 协议调用本地文件
+            result = await self.plugin.recognize_character(f"file://{image_url}")
+            self.plugin.db.update_image(
+                image_id=image_id,
+                character=result.get("character"),
+            )
+            return self._ok({"result": result})
+        except Exception as e:
+            return self._err(f"角色识别失败: {e}")
 
     async def handle_get_stats(self, request: web.Request) -> web.Response:
         total = self.plugin.db.count_images()

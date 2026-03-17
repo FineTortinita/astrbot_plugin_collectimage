@@ -30,9 +30,15 @@ class Database:
                 tags TEXT,
                 character TEXT,
                 description TEXT,
+                ai_detect TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 添加 ai_detect 字段（如果不存在）
+        try:
+            cursor.execute("ALTER TABLE images ADD COLUMN ai_detect TEXT")
+        except:
+            pass
         conn.commit()
         conn.close()
 
@@ -55,14 +61,15 @@ class Database:
         tags: Optional[dict] = None,
         character: Optional[str] = None,
         description: Optional[str] = None,
+        ai_detect: Optional[str] = None,
     ) -> bool:
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO images 
-                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     file_hash,
                     file_path,
@@ -73,6 +80,7 @@ class Database:
                     json.dumps(tags, ensure_ascii=False) if tags else None,
                     character,
                     description,
+                    ai_detect,
                 ),
             )
             conn.commit()
@@ -217,6 +225,36 @@ class Database:
         count = cursor.fetchone()[0]
         conn.close()
         return count
+
+    def search_character_random(self, keyword: str, limit: int = 1) -> list:
+        """模糊搜索角色并随机选取"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        pattern = f"%{keyword}%"
+        cursor.execute("""
+            SELECT * FROM images 
+            WHERE character LIKE ?
+            ORDER BY RANDOM() 
+            LIMIT ?
+        """, (pattern, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def search_all_random(self, keyword: str, limit: int = 1) -> list:
+        """模糊搜索标签和描述并随机选取"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        pattern = f"%{keyword}%"
+        cursor.execute("""
+            SELECT * FROM images 
+            WHERE tags LIKE ? OR description LIKE ?
+            ORDER BY RANDOM() 
+            LIMIT ?
+        """, (pattern, pattern, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
 
     def close(self):
         pass

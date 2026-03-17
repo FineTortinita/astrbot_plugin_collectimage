@@ -352,6 +352,15 @@ header h1 {
     background: #dc2626;
 }
 
+.btn-info {
+    background: #3b82f6;
+    color: white;
+}
+
+.btn-info:hover {
+    background: #2563eb;
+}
+
 /* 响应式 */
 @media (max-width: 768px) {
     .modal-body {

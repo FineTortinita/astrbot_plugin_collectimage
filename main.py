@@ -180,13 +180,20 @@ class CollectImagePlugin(Star):
                     shutil.copy(local_path, image_path)
                     logger.info(f"[CollectImage] 图片已保存: {image_path}")
 
+                    # 调用 AnimeTrace API 识别角色
                     image_url = msg.url or msg.file
                     if image_url:
+                        # 先进行 VLM 分析
                         result = await self.analyze_image(image_url, event)
                         
                         if result.get("filter_result") != "有效":
                             logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
                             continue
+                        
+                        # 调用 AnimeTrace API 识别角色
+                        char_result = await self.recognize_character(image_url)
+                        character = char_result.get("character", "未知")
+                        ai_detect = char_result.get("ai_detect", "")
                         
                         self.db.insert_image(
                             file_hash=file_hash,
@@ -196,10 +203,11 @@ class CollectImagePlugin(Star):
                             sender_id=str(sender_id),
                             timestamp=timestamp,
                             tags=result.get("tags"),
-                            character=result.get("character"),
+                            character=character,
                             description=result.get("description"),
+                            ai_detect=ai_detect,
                         )
-                        logger.info(f"[CollectImage] 分析完成: {result}")
+                        logger.info(f"[CollectImage] 分析完成: {result}, 角色: {character}, AI检测: {ai_detect}")
 
                 except Exception as e:
                     logger.error(f"[CollectImage] 处理图片失败: {e}")
@@ -297,26 +305,70 @@ class CollectImagePlugin(Star):
                 "description": ""
             }
 
-    @filter.command("search_tag")
-    async def search_tag(self, event: AstrMessageEvent, tag: str, count: int = 1):
-        """搜索指定标签的图片"""
+    async def recognize_character(self, image_url: str) -> dict:
+        """调用 AnimeTrace API 识别角色"""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                form = aiohttp.FormData()
+                form.add_field('url', image_url)
+                form.add_field('model', 'animetrace_high_beta')
+                form.add_field('is_multi', '1')
+                form.add_field('ai_detect', '1')
+                
+                async with session.post(
+                    'https://api.animetrace.com/v1/search', 
+                    data=form,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status != 200:
+                        logger.error(f"[CollectImage] 角色识别失败 HTTP: {resp.status}")
+                        return {"character": "未知", "ai_detect": "识别失败"}
+                    
+                    result = await resp.json()
+                    
+                    if result.get("code") != 17720:
+                        logger.error(f"[CollectImage] 角色识别失败: {result.get('code')}")
+                        return {"character": "未知", "ai_detect": str(result.get("code", ""))}
+                    
+                    character = result.get("data", {}).get("result", [{}])[0].get("name", "未知")
+                    ai_detect = result.get("data", {}).get("ai_detect", "")
+                    
+                    logger.info(f"[CollectImage] 角色识别成功: {character}, AI检测: {ai_detect}")
+                    return {"character": character, "ai_detect": ai_detect}
+                    
+        except Exception as e:
+            logger.error(f"[CollectImage] 角色识别异常: {e}")
+            return {"character": "未知", "ai_detect": "识别失败"}
+
+    @filter.command("moe")
+    async def moe(self, event: AstrMessageEvent, keyword: str, count: int = 1):
+        """搜索角色或标签的图片（模糊匹配+随机）"""
+        if keyword == "stats":
+            total = self.db.count_images()
+            yield event.plain_result(f"📊 图片收集统计\n\n共收集 {total} 张图片")
+            return
+        
         if count < 1:
             count = 1
         if count > 10:
             count = 10
         
-        results = self.db.search_images(tag=tag, limit=count)
+        # 优先搜索角色
+        results = self.db.search_character_random(keyword=keyword, limit=count)
+        
+        # 角色没找到再搜索标签和描述
+        if not results:
+            results = self.db.search_all_random(keyword=keyword, limit=count)
+        
+        if not results:
+            yield event.plain_result(f"未找到包含「{keyword}」的图片")
+            return
         
         for img in results:
             yield event.image_result(img["file_path"])
         
-        yield event.plain_result(f"找到 {len(results)} 张包含「{tag}」标签的图片")
-
-    @filter.command("image_stats")
-    async def image_stats(self, event: AstrMessageEvent):
-        """显示图片收集统计"""
-        total = self.db.count_images()
-        yield event.plain_result(f"📊 图片收集统计\n\n共收集 {total} 张图片")
+        yield event.plain_result(f"找到 {len(results)} 张包含「{keyword}」的图片")
 
     async def terminate(self):
         if self.web_server:

@@ -272,6 +272,36 @@ document.getElementById('reanalyze-btn').addEventListener('click', async () => {
     }
 });
 
+// 识别角色
+document.getElementById('recognize-btn').addEventListener('click', async () => {
+    if (!confirm('确定要识别这张图片的角色吗？')) return;
+    
+    const btn = document.getElementById('recognize-btn');
+    btn.disabled = true;
+    btn.textContent = '识别中...';
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/images/${currentImageId}/recognize_character`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            const result = data.result;
+            alert(`角色识别完成\n角色: ${result.character}\nAI检测: ${result.ai_detect}`);
+            openDetail(currentImageId);
+            loadImages();
+        } else {
+            alert('角色识别失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('角色识别失败: ' + e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '识别角色';
+    }
+});
+
 // 删除图片
 document.getElementById('delete-btn').addEventListener('click', async () => {
     if (!confirm('确定要删除这张图片吗？此操作不可恢复！')) return;
