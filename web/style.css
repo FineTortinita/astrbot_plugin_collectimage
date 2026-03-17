@@ -189,6 +189,74 @@ header h1 {
     text-overflow: ellipsis;
 }
 
+/* 角色编辑器 */
+.character-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+
+.character-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.character-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    background: #f5f5f5;
+    border-radius: 6px;
+}
+
+.character-item input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.character-item input::placeholder {
+    color: #999;
+}
+
+.character-item .work-input {
+    flex: 1;
+}
+
+.character-item .remove-char-btn {
+    padding: 4px 8px;
+    background: #ff4d4f;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.character-item .remove-char-btn:hover {
+    background: #ff7875;
+}
+
+.btn-small {
+    padding: 6px 12px;
+    font-size: 12px;
+    background: #1890ff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    align-self: flex-start;
+}
+
+.btn-small:hover {
+    background: #40a9ff;
+}
+
 .image-card-info .tags {
     font-size: 12px;
     color: #666;

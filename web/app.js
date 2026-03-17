@@ -217,8 +217,10 @@ async function openDetail(imageId) {
             document.getElementById('detail-group').textContent = img.group_id;
             document.getElementById('detail-sender').textContent = img.sender_id;
             document.getElementById('detail-time').textContent = new Date(img.timestamp * 1000).toLocaleString();
-            document.getElementById('detail-character').value = img.character || '';
             document.getElementById('detail-description').value = img.description || '';
+            
+            // 渲染角色编辑器
+            renderCharacterEditor(img.character);
             
             // 渲染标签
             const tagsContainer = document.getElementById('detail-tags');
@@ -241,6 +243,69 @@ async function openDetail(imageId) {
     }
 }
 
+// 渲染角色编辑器
+function renderCharacterEditor(characterJson) {
+    const container = document.querySelector('.character-list');
+    container.innerHTML = '';
+    
+    let characters = [];
+    if (characterJson) {
+        try {
+            characters = typeof characterJson === 'string' ? JSON.parse(characterJson) : characterJson;
+            if (!Array.isArray(characters)) characters = [];
+        } catch (e) {
+            characters = [];
+        }
+    }
+    
+    // 如果没有角色，添加一个空行
+    if (characters.length === 0) {
+        characters = [{ name: '', work: '' }];
+    }
+    
+    characters.forEach((char, index) => {
+        addCharacterRow(char.name, char.work);
+    });
+    
+    // 添加按钮事件
+    const addBtn = document.getElementById('add-character-btn');
+    addBtn.onclick = () => addCharacterRow('', '');
+}
+
+// 添加一行角色输入
+function addCharacterRow(name = '', work = '') {
+    const container = document.querySelector('.character-list');
+    const row = document.createElement('div');
+    row.className = 'character-item';
+    row.innerHTML = `
+        <input type="text" class="char-name" placeholder="角色名" value="${name || ''}">
+        <input type="text" class="work-input" placeholder="作品名" value="${work || ''}">
+        <button type="button" class="remove-char-btn">删除</button>
+    `;
+    
+    row.querySelector('.remove-char-btn').onclick = () => {
+        container.removeChild(row);
+    };
+    
+    container.appendChild(row);
+}
+
+// 获取角色编辑器中的数据并转换为JSON
+function getCharacterJson() {
+    const rows = document.querySelectorAll('.character-item');
+    const characters = [];
+    
+    rows.forEach(row => {
+        const name = row.querySelector('.char-name').value.trim();
+        const work = row.querySelector('.work-input').value.trim();
+        if (name) {
+            characters.push({ name, work });
+        }
+    });
+    
+    return JSON.stringify(characters);
+}
+
 // 关闭详情弹窗
 document.querySelector('.close').addEventListener('click', () => {
     detailModal.classList.add('hidden');
@@ -254,7 +319,7 @@ detailModal.addEventListener('click', (e) => {
 
 // 保存详情
 document.getElementById('save-detail-btn').addEventListener('click', async () => {
-    const character = document.getElementById('detail-character').value;
+    const character = getCharacterJson();
     const description = document.getElementById('detail-description').value;
     
     try {
