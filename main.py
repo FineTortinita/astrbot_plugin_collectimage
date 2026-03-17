@@ -218,7 +218,7 @@ class CollectImagePlugin(Star):
         return False
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
-    async def on_group_message(self, event: AstrMessageEvent):
+    async def on_group_message(self, event: AstrMessageEvent, **kwargs):
         group_id = event.get_group_id()
         allowed_groups = self.config.get("allowed_groups", [])
 
