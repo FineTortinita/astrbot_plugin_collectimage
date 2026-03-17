@@ -198,10 +198,8 @@ class CollectImagePlugin(Star):
                         person_count = self._extract_person_count(result.get("tags", {}))
                         character = self._extract_characters_by_count(all_results, person_count)
                         
-                        # 保存完整角色结果到 ai_detect（追加）
-                        import json as json_module
-                        if all_results:
-                            ai_detect = json_module.dumps(all_results, ensure_ascii=False)
+                        # 4. AI 检测结果只保存布尔值
+                        ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
                         
                         self.db.insert_image(
                             file_hash=file_hash,
@@ -215,7 +213,7 @@ class CollectImagePlugin(Star):
                             description=result.get("description"),
                             ai_detect=ai_detect,
                         )
-                        logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect[:50] if ai_detect else ''}")
+                        logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect}")
 
                 except Exception as e:
                     logger.error(f"[CollectImage] 处理图片失败: {e}")
