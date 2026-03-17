@@ -431,11 +431,9 @@ class CollectImagePlugin(Star):
         if not results:
             yield event.plain_result(f"未找到包含「{keyword}」的图片")
             return
-        
+
         for img in results:
             yield event.image_result(img["file_path"])
-        
-        yield event.plain_result(f"找到 {len(results)} 张包含「{keyword}」的图片")
 
     async def terminate(self):
         if self.web_server:
