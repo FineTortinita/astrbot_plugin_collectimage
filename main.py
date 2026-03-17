@@ -13,7 +13,7 @@ from astrbot.core.message.components import Image
 from .database import Database
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.1.0")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.2.0")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
