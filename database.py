@@ -497,8 +497,9 @@ class Database:
             conditions.append("(character LIKE ? OR ai_detect LIKE ?)")
             params.extend([t_pattern, t_pattern])
         
-        # 3. 角色别名 → 原始名
+        # 3. 角色别名 → 原始名（限制数量避免SQL条件过多）
         char_original_names = self.get_original_names_by_alias(keyword, "character")
+        char_original_names = char_original_names[:20]
         for orig_name in char_original_names:
             conditions.append("character LIKE ?")
             params.append(f"%{orig_name}%")
@@ -513,8 +514,9 @@ class Database:
                 conditions.append("character LIKE ?")
                 params.append(f"%{t_name}%")
         
-        # 4. 作品别名 → 原始名 (搜索 character 字段中的作品名)
+        # 4. 作品别名 → 原始名（限制数量避免SQL条件过多）
         work_original_names = self.get_work_original_names_by_alias(keyword)
+        work_original_names = work_original_names[:20]
         for orig_name in work_original_names:
             # 匹配 [作品名] 格式
             conditions.append("character LIKE ?")
