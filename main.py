@@ -13,7 +13,7 @@ from astrbot.core.message.components import Image
 from .database import Database
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.2.0")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.3.0")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -296,6 +296,27 @@ class CollectImagePlugin(Star):
                 "character": "",
                 "description": ""
             }
+
+    @filter.command("search_tag")
+    async def search_tag(self, event: AstrMessageEvent, tag: str, count: int = 1):
+        """搜索指定标签的图片"""
+        if count < 1:
+            count = 1
+        if count > 10:
+            count = 10
+        
+        results = self.db.search_images(tag=tag, limit=count)
+        
+        for img in results:
+            yield event.image_result(img["file_path"])
+        
+        yield event.plain_result(f"找到 {len(results)} 张包含「{tag}」标签的图片")
+
+    @filter.command("image_stats")
+    async def image_stats(self, event: AstrMessageEvent):
+        """显示图片收集统计"""
+        total = self.db.count_images()
+        yield event.plain_result(f"📊 图片收集统计\n\n共收集 {total} 张图片")
 
     async def terminate(self):
         if self.web_server:
