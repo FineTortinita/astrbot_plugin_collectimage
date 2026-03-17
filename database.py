@@ -222,6 +222,29 @@ class Database:
         except Exception:
             return False
 
+    def cleanup_missing_files(self) -> int:
+        """清理数据库中有记录但文件不存在的条目，返回清理数量"""
+        import os
+        cleaned = 0
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, file_path FROM images")
+            rows = cursor.fetchall()
+            
+            for row in rows:
+                image_id = row[0]
+                file_path = row[1]
+                if file_path and not os.path.exists(file_path):
+                    cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
+                    cleaned += 1
+            
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return cleaned
+
     def search_images(
         self,
         tag: str = None,

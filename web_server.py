@@ -62,6 +62,7 @@ class WebServer:
         self.app.router.add_get("/api/aliases/import/status", self.handle_import_status)
         self.app.router.add_post("/api/aliases/import/stop", self.handle_import_stop)
 
+        self.app.router.add_post("/api/maintenance/cleanup", self.handle_cleanup)
         self.app.router.add_get("/api/stats", self.handle_get_stats)
         self.app.router.add_get("/api/health", self.handle_health_check)
 
@@ -276,6 +277,18 @@ class WebServer:
         except Exception as e:
             logger.error(f"[CollectImage WebUI] 角色识别失败: {e}")
             return self._err(f"角色识别失败: {e}")
+
+    async def handle_cleanup(self, request: web.Request) -> web.Response:
+        """清理数据库中有记录但文件不存在的条目"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        try:
+            cleaned = self.plugin.db.cleanup_missing_files()
+            return self._ok({"cleaned": cleaned, "message": f"已清理 {cleaned} 条无效记录"})
+        except Exception as e:
+            logger.error(f"[CollectImage] 清理失败: {e}")
+            return self._err(str(e))
 
     async def handle_get_stats(self, request: web.Request) -> web.Response:
         total = self.plugin.db.count_images()
