@@ -9,7 +9,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.event.filter import EventMessageType
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.core.message.components import Image, Node, Nodes
+from astrbot.core.message.components import Image
 
 from .database import Database
 
@@ -225,131 +225,71 @@ class CollectImagePlugin(Star):
         if allowed_groups and group_id not in allowed_groups:
             return
 
-        sender_id = event.get_sender_id()
-
-        messages = event.get_messages()
-        logger.info(f"[CollectImage] 消息链长度: {len(messages)}, 类型: {[type(m).__name__ for m in messages]}")
-
-        for i, msg in enumerate(messages):
-            # 处理普通图片
+        for i, msg in enumerate(event.get_messages()):
             if isinstance(msg, Image):
-                await self._process_single_image(msg, event, group_id, sender_id, i)
-            
-            # 处理合并转发消息
-            elif isinstance(msg, Node):
-                await self._process_forward_node(msg, event, group_id, sender_id)
-            
-            elif isinstance(msg, Nodes):
-                for node in msg.nodes:
-                    await self._process_forward_node(node, event, group_id, sender_id)
-
-    async def _process_forward_node(self, node: Node, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
-        """处理合并转发消息节点"""
-        logger.info(f"[CollectImage] 检测到合并转发消息节点, node.id={node.id}, content长度={len(node.content) if node.content else 0}")
-        
-        # 情况1: Node 有 id 字段，需要调用 API 获取实际内容
-        if node.id:
-            forward_id = node.id
-            bot = getattr(event, 'bot', None)
-            logger.info(f"[CollectImage] 获取到 bot 对象: {bot}")
-            if bot and hasattr(bot, 'api'):
+                if self._is_sticker(msg, event, i):
+                    logger.info("[CollectImage] 跳过表情包")
+                    continue
+                
                 try:
-                    logger.info(f"[CollectImage] 调用 get_forward_msg API, id={forward_id}")
-                    result = await bot.api.call_action('get_forward_msg', id=str(forward_id))
-                    logger.info(f"[CollectImage] get_forward_msg 返回: {result}")
-                    messages = result.get('messages', []) if isinstance(result, dict) else []
+                    local_path = await msg.convert_to_file_path()
+                    
+                    # 检查图片尺寸
+                    if not self._check_image_size(local_path):
+                        logger.info("[CollectImage] 图片尺寸过小，跳过")
+                        continue
+                    
+                    file_hash = self._calculate_hash(local_path)
+                    
+                    if self.db.is_hash_exists(file_hash):
+                        logger.info("[CollectImage] 图片已存在，跳过")
+                        continue
+                    
+                    sender_id = event.get_sender_id()
+                    timestamp = int(time.time())
+                    ext = os.path.splitext(local_path)[1] or ".jpg"
+                    image_filename = f"{timestamp}_{group_id}_{sender_id}{ext}"
+                    image_path = os.path.join(self.images_dir, image_filename)
+                    shutil.copy(local_path, image_path)
+                    logger.info(f"[CollectImage] 图片已保存: {image_path}")
+
+                    image_url = msg.url or msg.file
+                    if image_url:
+                        # 1. 先 VLM 分析获取 tags
+                        result = await self.analyze_image(image_url, event)
+                        
+                        if result.get("filter_result") != "有效":
+                            logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
+                            continue
+                        
+                        # 2. VLM 有效再调用 AnimeTrace 获取角色
+                        char_result = await self.recognize_character(image_url)
+                        all_results = char_result.get("all_results", [])
+                        ai_detect = char_result.get("ai_detect", "")
+                        
+                        # 3. 根据 AnimeTrace 结果确定人数并提取角色
+                        person_count = len(all_results)
+                        character = self._extract_characters(all_results)
+                        
+                        # 4. AI 检测结果只保存布尔值
+                        ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
+                        
+                        self.db.insert_image(
+                            file_hash=file_hash,
+                            file_path=image_path,
+                            file_name=image_filename,
+                            group_id=str(group_id),
+                            sender_id=str(sender_id),
+                            timestamp=timestamp,
+                            tags=result.get("tags"),
+                            character=character,
+                            description=result.get("description"),
+                            ai_detect=ai_detect,
+                        )
+                        logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect}")
+
                 except Exception as e:
-                    logger.error(f"[CollectImage] 获取转发消息失败: {e}")
-                    return
-            else:
-                logger.warning("[CollectImage] 无法获取 bot 对象或 api，跳过转发消息")
-                return
-        else:
-            # 情况2: Node 已有 content 内容
-            messages = [{'message': node.content}]
-            logger.info(f"[CollectImage] 使用 node.content，内容: {node.content}")
-
-        # 解析消息节点，提取图片
-        for msg_item in messages:
-            message_content = msg_item.get('message', [])
-            if not isinstance(message_content, list):
-                logger.warning(f"[CollectImage] message_content 不是列表: {type(message_content)}")
-                continue
-            logger.info(f"[CollectImage] 解析消息节点，内容条数: {len(message_content)}")
-            for segment in message_content:
-                logger.info(f"[CollectImage] 消息段类型: {type(segment)}, {segment}")
-                if isinstance(segment, Image):
-                    await self._process_single_image(segment, event, group_id, sender_id, 0)
-                elif isinstance(segment, Node):
-                    await self._process_forward_node(segment, event, group_id, sender_id)
-                elif isinstance(segment, Nodes):
-                    for n in segment.nodes:
-                        await self._process_forward_node(n, event, group_id, sender_id)
-
-    async def _process_single_image(self, msg: Image, event: AstrMessageEvent, group_id: str, sender_id: str, img_index: int = 0) -> None:
-        """处理单张图片的完整流程"""
-        if self._is_sticker(msg, event, img_index):
-            logger.info("[CollectImage] 跳过表情包")
-            return
-        
-        try:
-            local_path = await msg.convert_to_file_path()
-            
-            # 检查图片尺寸
-            if not self._check_image_size(local_path):
-                logger.info("[CollectImage] 图片尺寸过小，跳过")
-                return
-            
-            file_hash = self._calculate_hash(local_path)
-            
-            if self.db.is_hash_exists(file_hash):
-                logger.info("[CollectImage] 图片已存在，跳过")
-                return
-            
-            timestamp = int(time.time())
-            ext = os.path.splitext(local_path)[1] or ".jpg"
-            image_filename = f"{timestamp}_{group_id}_{sender_id}{ext}"
-            image_path = os.path.join(self.images_dir, image_filename)
-            shutil.copy(local_path, image_path)
-            logger.info(f"[CollectImage] 图片已保存: {image_path}")
-
-            image_url = msg.url or msg.file
-            if image_url:
-                # 1. 先 VLM 分析获取 tags
-                result = await self.analyze_image(image_url, event)
-                
-                if result.get("filter_result") != "有效":
-                    logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
-                    return
-                
-                # 2. VLM 有效再调用 AnimeTrace 获取角色
-                char_result = await self.recognize_character(image_url)
-                all_results = char_result.get("all_results", [])
-                ai_detect = char_result.get("ai_detect", "")
-                
-                # 3. 根据 AnimeTrace 结果确定人数并提取角色
-                person_count = len(all_results)
-                character = self._extract_characters(all_results)
-                
-                # 4. AI 检测结果只保存布尔值
-                ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
-                
-                self.db.insert_image(
-                    file_hash=file_hash,
-                    file_path=image_path,
-                    file_name=image_filename,
-                    group_id=str(group_id),
-                    sender_id=str(sender_id),
-                    timestamp=timestamp,
-                    tags=result.get("tags"),
-                    character=character,
-                    description=result.get("description"),
-                    ai_detect=ai_detect,
-                )
-                logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect}")
-
-        except Exception as e:
-            logger.error(f"[CollectImage] 处理图片失败: {e}")
+                    logger.error(f"[CollectImage] 处理图片失败: {e}")
 
     async def analyze_image(self, image_url: str, event: AstrMessageEvent) -> dict:
         try:
