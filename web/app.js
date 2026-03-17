@@ -164,11 +164,26 @@ function renderImages(images) {
             tagsText = allTags.slice(0, 3).join(', ');
         }
         
+        // 解析角色数据 (支持 JSON 数组格式)
+        let characterText = '未知角色';
+        if (img.character) {
+            try {
+                const chars = JSON.parse(img.character);
+                if (Array.isArray(chars) && chars.length > 0) {
+                    characterText = chars.map(c => c.work ? `${c.name}[${c.work}]` : c.name).join(', ');
+                } else {
+                    characterText = img.character;
+                }
+            } catch {
+                characterText = img.character;
+            }
+        }
+        
         card.innerHTML = `
             <img src="${API_BASE}/images/${img.file_name}" alt="${img.file_name}">
             <div class="image-card-info">
-                <div class="character">${img.character || '未知角色'}</div>
-                <div class="tags">${tagsText || img.description || '无标签'}</div>
+                <div class="character">${characterText}</div>
+                <div class="tags">${tagsText || '无标签'}</div>
             </div>
         `;
         

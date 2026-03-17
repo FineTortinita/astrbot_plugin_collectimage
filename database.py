@@ -529,53 +529,81 @@ class Database:
         conditions = []
         params = []
         
-        # 1. 直接匹配用户输入
+        # 1. 直接匹配用户输入 (兼容新旧格式)
         pattern = f"%{keyword}%"
         conditions.append("(character LIKE ? OR ai_detect LIKE ? OR tags LIKE ? OR description LIKE ?)")
         params.extend([pattern, pattern, pattern, pattern])
         
-        # 2. 用户输入的简繁转换
+        # 2. 匹配 JSON 格式中的 name 字段 (新格式)
+        name_pattern = f'%"{keyword}"%'
+        conditions.append("character LIKE ?")
+        params.append(name_pattern)
+        
+        # 3. 匹配 JSON 格式中的 work 字段 (新格式)
+        work_pattern = f'%"work": "%{keyword}%"%'
+        conditions.append("character LIKE ?")
+        params.append(work_pattern)
+        
+        # 4. 用户输入的简繁转换
         simplified = self._simplify_chinese(keyword)
         if simplified != keyword:
             s_pattern = f"%{simplified}%"
             conditions.append("(character LIKE ? OR ai_detect LIKE ?)")
             params.extend([s_pattern, s_pattern])
+            
+            # JSON 格式的简繁
+            s_name_pattern = f'%"{simplified}"%'
+            conditions.append("character LIKE ?")
+            params.append(s_name_pattern)
         
         traditional = self._traditionalize(keyword)
         if traditional != keyword and traditional != simplified:
             t_pattern = f"%{traditional}%"
             conditions.append("(character LIKE ? OR ai_detect LIKE ?)")
             params.extend([t_pattern, t_pattern])
+            
+            # JSON 格式的繁化
+            t_name_pattern = f'%"{traditional}"%'
+            conditions.append("character LIKE ?")
+            params.append(t_name_pattern)
         
-        # 3. 角色别名 → 原始名（限制数量避免SQL条件过多）
+        # 5. 角色别名 → 原始名（限制数量避免SQL条件过多）
         char_original_names = self.get_original_names_by_alias(keyword, "character")
         char_original_names = char_original_names[:20]
         for orig_name in char_original_names:
+            # 匹配原始名
             conditions.append("character LIKE ?")
             params.append(f"%{orig_name}%")
+            # 匹配 JSON 中的 name 字段
+            conditions.append("character LIKE ?")
+            params.append(f'%"{orig_name}"%')
             # 原始名的简繁转换
             s_name = self._simplify_chinese(orig_name)
             if s_name != orig_name:
                 conditions.append("character LIKE ?")
                 params.append(f"%{s_name}%")
+                conditions.append("character LIKE ?")
+                params.append(f'%"{s_name}"%')
             # 原始名的繁化
             t_name = self._traditionalize(orig_name)
             if t_name != orig_name and t_name != s_name:
                 conditions.append("character LIKE ?")
                 params.append(f"%{t_name}%")
+                conditions.append("character LIKE ?")
+                params.append(f'%"{t_name}"%')
         
-        # 4. 作品别名 → 原始名（限制数量避免SQL条件过多）
+        # 6. 作品别名 → 原始名（限制数量避免SQL条件过多）
         work_original_names = self.get_work_original_names_by_alias(keyword)
         work_original_names = work_original_names[:20]
         for orig_name in work_original_names:
-            # 匹配 [作品名] 格式
+            # 匹配 work 字段 (新格式)
             conditions.append("character LIKE ?")
-            params.append(f"%[{orig_name}]%")
+            params.append(f'%"work": "%{orig_name}%"%')
             # 作品名简繁
             s_name = self._simplify_chinese(orig_name)
             if s_name != orig_name:
                 conditions.append("character LIKE ?")
-                params.append(f"%[{s_name}]%")
+                params.append(f'%"work": "%{s_name}%"%')
         
         return conditions, params
 
