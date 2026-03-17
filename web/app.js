@@ -31,12 +31,30 @@ async function checkAuth() {
         const data = await response.json();
         if (data.success && data.logged_in) {
             showMainPage();
+            await cleanupMissingFiles();
             loadImages();
         } else {
             showLoginPage();
         }
     } catch (e) {
         showLoginPage();
+    }
+}
+
+// 页面加载时清理无效记录
+async function cleanupMissingFiles() {
+    try {
+        const response = await fetch(`${API_BASE}/api/maintenance/cleanup`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({type: 'db'})
+        });
+        const data = await response.json();
+        if (data.success && data.cleaned > 0) {
+            console.log(`[CollectImage] 已清理 ${data.cleaned} 条无效记录`);
+        }
+    } catch (e) {
+        console.error('清理失败:', e);
     }
 }
 
