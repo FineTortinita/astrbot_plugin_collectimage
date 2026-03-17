@@ -1,9 +1,0 @@
-configVersion = "2.1"
-maxIterations = 10
-agent = "gemini"
-tracker = "json"
-autoCommit = false
-subagentTracingDetail = "minimal"
-
-[agentOptions]
-[trackerOptions]

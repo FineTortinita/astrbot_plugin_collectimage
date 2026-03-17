@@ -1,8 +1,0 @@
-name: astrbot_plugin_collectimage
-display_name: ImageTagger
-desc: 群聊图片特征分析与标签化插件，负责监听特定群聊，过滤表情包，调用大模型提取图片特征，并进行本地持久化存储
-version: v1.1.0
-author: FineTortinita
-repo: https://github.com/FineTortinita/astrbot_plugin_collectimage
-support_platforms:
-  - aiocqhttp
