@@ -227,7 +227,10 @@ class CollectImagePlugin(Star):
 
         sender_id = event.get_sender_id()
 
-        for i, msg in enumerate(event.get_messages()):
+        messages = event.get_messages()
+        logger.info(f"[CollectImage] 消息链长度: {len(messages)}, 类型: {[type(m).__name__ for m in messages]}")
+
+        for i, msg in enumerate(messages):
             # 处理普通图片
             if isinstance(msg, Image):
                 await self._process_single_image(msg, event, group_id, sender_id, i)
