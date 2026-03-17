@@ -242,31 +242,31 @@ class Database:
         return count
 
     def search_character_random(self, keyword: str, limit: int = 1) -> list:
-        """模糊搜索角色并随机选取"""
+        """模糊搜索角色(含作品)并随机选取"""
         conn = self._get_connection()
         cursor = conn.cursor()
         pattern = f"%{keyword}%"
         cursor.execute("""
             SELECT * FROM images 
-            WHERE character LIKE ?
+            WHERE character LIKE ? OR ai_detect LIKE ?
             ORDER BY RANDOM() 
             LIMIT ?
-        """, (pattern, limit))
+        """, (pattern, pattern, limit))
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
 
     def search_all_random(self, keyword: str, limit: int = 1) -> list:
-        """模糊搜索标签和描述并随机选取"""
+        """模糊搜索标签、描述和角色(含作品)并随机选取"""
         conn = self._get_connection()
         cursor = conn.cursor()
         pattern = f"%{keyword}%"
         cursor.execute("""
             SELECT * FROM images 
-            WHERE tags LIKE ? OR description LIKE ?
+            WHERE tags LIKE ? OR description LIKE ? OR character LIKE ? OR ai_detect LIKE ?
             ORDER BY RANDOM() 
             LIMIT ?
-        """, (pattern, pattern, limit))
+        """, (pattern, pattern, pattern, pattern, limit))
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]

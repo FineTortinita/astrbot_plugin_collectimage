@@ -336,7 +336,8 @@ class CollectImagePlugin(Star):
                     
                     result = await resp.json()
                     
-                    if result.get("code") != 17720:
+                    # code=0 表示成功
+                    if result.get("code") != 0:
                         logger.error(f"[CollectImage] 角色识别失败: {result.get('code')}")
                         return {"character": "未知", "ai_detect": str(result.get("code", "")), "all_results": []}
                     
@@ -369,7 +370,7 @@ class CollectImagePlugin(Star):
         return 1
 
     def _extract_characters_by_count(self, all_results: list, count: int) -> str:
-        """根据人数从 AnimeTrace 结果中提取对应数量的角色名"""
+        """根据人数从 AnimeTrace 结果中提取对应数量的角色名和作品"""
         if not all_results or count <= 0:
             return "未知"
         
@@ -379,7 +380,14 @@ class CollectImagePlugin(Star):
                 break
             char_list = item.get("character", [])
             if char_list:
-                characters.append(char_list[0].get("character", ""))
+                char_info = char_list[0]
+                char_name = char_info.get("character", "")
+                char_work = char_info.get("work", "")
+                if char_name:
+                    if char_work:
+                        characters.append(f"{char_name}[{char_work}]")
+                    else:
+                        characters.append(char_name)
         
         if not characters:
             return "未知"
