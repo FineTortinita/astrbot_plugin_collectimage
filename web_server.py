@@ -257,18 +257,8 @@ class WebServer:
             # 使用本地文件 base64 方式识别
             result = await self.plugin.recognize_character_from_file(image_path)
             
-            # 根据人数提取角色
-            tags = image.get("tags")
-            if tags:
-                try:
-                    import json
-                    if isinstance(tags, str):
-                        tags = json.loads(tags)
-                except:
-                    pass
-            
-            person_count = self.plugin._extract_person_count(tags) if tags else 1
-            character = self.plugin._extract_characters_by_count(result.get("all_results", []), person_count)
+            # 从 AnimeTrace 结果直接提取角色（根据结果数量确定人数）
+            character = self.plugin._extract_characters(result.get("all_results", []))
             
             # 更新数据库
             self.plugin.db.update_character(image_id, character)

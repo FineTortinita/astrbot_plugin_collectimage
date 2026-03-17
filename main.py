@@ -255,21 +255,21 @@ class CollectImagePlugin(Star):
 
                     image_url = msg.url or msg.file
                     if image_url:
-                        # 1. 先调用 AnimeTrace 获取所有角色结果
-                        char_result = await self.recognize_character(image_url)
-                        all_results = char_result.get("all_results", [])
-                        ai_detect = char_result.get("ai_detect", "")
-                        
-                        # 2. VLM 分析获取 tags
+                        # 1. 先 VLM 分析获取 tags
                         result = await self.analyze_image(image_url, event)
                         
                         if result.get("filter_result") != "有效":
                             logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
                             continue
                         
-                        # 3. 根据人数提取对应数量的角色
-                        person_count = self._extract_person_count(result.get("tags", {}))
-                        character = self._extract_characters_by_count(all_results, person_count)
+                        # 2. VLM 有效再调用 AnimeTrace 获取角色
+                        char_result = await self.recognize_character(image_url)
+                        all_results = char_result.get("all_results", [])
+                        ai_detect = char_result.get("ai_detect", "")
+                        
+                        # 3. 根据 AnimeTrace 结果确定人数并提取角色
+                        person_count = len(all_results)
+                        character = self._extract_characters(all_results)
                         
                         # 4. AI 检测结果只保存布尔值
                         ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
@@ -296,9 +296,9 @@ class CollectImagePlugin(Star):
             umo = event.unified_msg_origin
             provider_id = await self.context.get_current_chat_provider_id(umo=umo)
 
-            filter_prompt = """请判断这张图片是否是有效的绘画/照片素材。
-有效：有人物、角色、场景、物品等具体内容的人工绘制或摄影作品。
-无效：屏幕截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。
+            filter_prompt = """请判断这张图片是否是有效的绘画素材。
+有效：有人物、角色、场景、物品等具体内容的动漫风格绘画、插画 CG、漫画、游戏立绘等人工绘制的图片。
+无效：照片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。
 请直接回答"有效"或"无效"，无需其他解释。"""
 
             llm_resp = await self.context.llm_generate(
@@ -418,12 +418,13 @@ class CollectImagePlugin(Star):
                         logger.error(f"[CollectImage] 角色识别失败: {result.get('code')}")
                         return {"character": "未知", "ai_detect": str(result.get("code", "")), "all_results": []}
                     
-                    # 返回完整结果用于后续处理
+                    # 获取原始结果并过滤掉 not_confident 的结果
                     all_results = result.get("data", [])
                     ai_detect = str(result.get("ai", ""))
+                    filtered_results = [item for item in all_results if not item.get("not_confident", False)]
                     
-                    logger.info(f"[CollectImage] 角色识别成功，共 {len(all_results)} 个结果, AI检测: {ai_detect}")
-                    return {"character": "未知", "ai_detect": ai_detect, "all_results": all_results}
+                    logger.info(f"[CollectImage] 角色识别成功，共 {len(all_results)} 个原始结果, 过滤后 {len(filtered_results)} 个, AI检测: {ai_detect}")
+                    return {"character": "未知", "ai_detect": ai_detect, "all_results": filtered_results}
                     
         except Exception as e:
             logger.error(f"[CollectImage] 角色识别异常: {e}")
@@ -440,38 +441,16 @@ class CollectImagePlugin(Star):
             logger.error(f"[CollectImage] 读取图片文件失败: {e}")
             return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
 
-    def _extract_person_count(self, tags: dict) -> int:
-        """从 VLM 返回的 tags 中提取人数"""
-        gender_tags = tags.get("gender", [])
-        if not gender_tags:
-            return 1
-        
-        tag = gender_tags[0]
-        if tag in ["1girl", "1boy", "solo"]:
-            return 1
-        elif tag in ["2girls", "2boys"]:
-            return 2
-        elif tag in ["3girls", "3boys"]:
-            return 3
-        elif tag in ["multiple_girls", "multiple_boys", "group"]:
-            return 3
-        return 1
-
-    def _extract_characters_by_count(self, all_results: list, count: int) -> str:
-        """根据人数从 AnimeTrace 结果中提取对应数量的角色名和作品，返回 JSON 数组
-        只取 not_confident: false 的结果，过滤误识别
+    def _extract_characters(self, all_results: list) -> str:
+        """从 AnimeTrace 结果中提取所有角色名和作品，返回 JSON 数组
+        注意：recognize_character 已过滤 not_confident
         """
-        if not all_results or count <= 0:
+        if not all_results:
             return "[]"
         
         characters = []
         
-        # 先过滤出置信的结果
-        confident_results = [item for item in all_results if not item.get("not_confident", False)]
-        
-        for i, item in enumerate(confident_results):
-            if i >= count:
-                break
+        for item in all_results:
             char_list = item.get("character", [])
             if char_list:
                 char_info = char_list[0]
