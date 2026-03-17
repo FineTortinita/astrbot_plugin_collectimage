@@ -180,7 +180,7 @@ function renderImages(images) {
         }
         
         card.innerHTML = `
-            <img src="${API_BASE}/images/${img.file_name}" alt="${img.file_name}">
+            <img src="${API_BASE}/images/${img.file_name}" alt="${img.file_name}" loading="lazy">
             <div class="image-card-info">
                 <div class="character">${characterText}</div>
                 <div class="tags">${tagsText || '无标签'}</div>
