@@ -464,9 +464,9 @@ class CollectImagePlugin(Star):
         return ",".join(characters)
 
     @filter.command("moe")
-    async def moe(self, event: AstrMessageEvent, keyword: str, count: int = 1):
+    async def moe(self, event: AstrMessageEvent, kw: str, count: int = 1):
         """搜索角色或标签的图片（模糊匹配+随机）"""
-        if keyword == "stats":
+        if kw == "stats":
             total = self.db.count_images()
             yield event.plain_result(f"📊 图片收集统计\n\n共收集 {total} 张图片")
             return
@@ -477,14 +477,14 @@ class CollectImagePlugin(Star):
             count = 10
         
         # 优先搜索角色（含别名匹配）
-        results = self.db.search_character_random_with_alias(keyword=keyword, limit=count)
+        results = self.db.search_character_random_with_alias(keyword=kw, limit=count)
         
         # 角色没找到再搜索标签和描述（含别名匹配）
         if not results:
-            results = self.db.search_all_random_with_alias(keyword=keyword, limit=count)
+            results = self.db.search_all_random_with_alias(keyword=kw, limit=count)
         
         if not results:
-            yield event.plain_result(f"未找到包含「{keyword}」的图片")
+            yield event.plain_result(f"未找到包含「{kw}」的图片")
             return
 
         for img in results:
