@@ -418,13 +418,12 @@ class CollectImagePlugin(Star):
                         logger.error(f"[CollectImage] 角色识别失败: {result.get('code')}")
                         return {"character": "未知", "ai_detect": str(result.get("code", "")), "all_results": []}
                     
-                    # 获取原始结果并过滤掉 not_confident 的结果
+                    # 获取原始结果
                     all_results = result.get("data", [])
                     ai_detect = str(result.get("ai", ""))
-                    filtered_results = [item for item in all_results if not item.get("not_confident", False)]
                     
-                    logger.info(f"[CollectImage] 角色识别成功，共 {len(all_results)} 个原始结果, 过滤后 {len(filtered_results)} 个, AI检测: {ai_detect}")
-                    return {"character": "未知", "ai_detect": ai_detect, "all_results": filtered_results}
+                    logger.info(f"[CollectImage] 角色识别成功，共 {len(all_results)} 个结果, AI检测: {ai_detect}")
+                    return {"character": "未知", "ai_detect": ai_detect, "all_results": all_results}
                     
         except Exception as e:
             logger.error(f"[CollectImage] 角色识别异常: {e}")
@@ -442,9 +441,7 @@ class CollectImagePlugin(Star):
             return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
 
     def _extract_characters(self, all_results: list) -> str:
-        """从 AnimeTrace 结果中提取所有角色名和作品，返回 JSON 数组
-        注意：recognize_character 已过滤 not_confident
-        """
+        """从 AnimeTrace 结果中提取所有角色名和作品，返回 JSON 数组"""
         if not all_results:
             return "[]"
         
