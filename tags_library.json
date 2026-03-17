@@ -11,13 +11,6 @@
     {"name": "group", "cn": "群体"},
     {"name": "all_male", "cn": "全男性"}
   ],
-  "age": [
-    {"name": "loli", "cn": "萝"},
-    {"name": "shota", "cn": "正太"},
-    {"name": "young_girl", "cn": "少女"},
-    {"name": "mature_woman", "cn": "御姐"},
-    {"name": "adult", "cn": "成人"}
-  ],
   "hair": [
     {"name": "long_hair", "cn": "长发"},
     {"name": "short_hair", "cn": "短发"},

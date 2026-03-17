@@ -327,7 +327,7 @@ class CollectImagePlugin(Star):
 2. 只选择确实存在的特征，不要猜测
 3. 必须使用中文标签名返回（如"长发"、"金发"、"连衣裙"）
 4. 以JSON格式返回，格式如下：
-{{"gender": ["中文标签"], "age": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
+{{"gender": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
 如果某个分类没有匹配的标签，返回空列表。"""
 
             llm_resp = await self.context.llm_generate(
@@ -521,7 +521,7 @@ class CollectImagePlugin(Star):
 2. 只选择确实存在的特征，不要猜测
 3. 必须使用中文标签名返回（如"长发"、"金发"、"连衣裙"）
 4. 以JSON格式返回，格式如下：
-{{"gender": ["中文标签"], "age": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
+{{"gender": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
 如果某个分类没有匹配的标签，返回空列表。"""
 
             llm_resp = await self.context.llm_generate(
