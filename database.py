@@ -34,13 +34,37 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # 添加 ai_detect 字段（如果不存在）
         try:
             cursor.execute("ALTER TABLE images ADD COLUMN ai_detect TEXT")
         except:
             pass
+        
+        self._init_alias_db(conn, cursor)
+        
         conn.commit()
         conn.close()
+
+    def _init_alias_db(self, conn=None, cursor=None):
+        """初始化别名表"""
+        should_close = False
+        if conn is None or cursor is None:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            should_close = True
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS character_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alias_type TEXT NOT NULL,
+                original_name TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                UNIQUE(alias_type, original_name, alias)
+            )
+        """)
+        
+        if should_close:
+            conn.commit()
+            conn.close()
 
     def is_hash_exists(self, file_hash: str) -> bool:
         conn = self._get_connection()
@@ -267,6 +291,270 @@ class Database:
             ORDER BY RANDOM() 
             LIMIT ?
         """, (pattern, pattern, pattern, pattern, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def add_alias(self, alias_type: str, original_name: str, alias: str) -> bool:
+        """添加别名"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR IGNORE INTO character_aliases (alias_type, original_name, alias) VALUES (?, ?, ?)",
+                (alias_type, original_name, alias)
+            )
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+        except Exception:
+            return False
+
+    def get_all_aliases(self) -> list:
+        """获取所有别名"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM character_aliases ORDER BY alias_type, original_name")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_aliases_by_type(self, alias_type: str) -> list:
+        """按类型获取别名"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM character_aliases WHERE alias_type = ? ORDER BY original_name",
+            (alias_type,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def delete_alias(self, alias_id: int) -> bool:
+        """删除别名"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM character_aliases WHERE id = ?", (alias_id,))
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+        except Exception:
+            return False
+
+    def search_alias(self, keyword: str) -> list:
+        """搜索别名"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        pattern = f"%{keyword}%"
+        cursor.execute(
+            "SELECT * FROM character_aliases WHERE original_name LIKE ? OR alias LIKE ? ORDER BY alias_type, original_name",
+            (pattern, pattern)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def import_aliases(self, aliases_data: list) -> int:
+        """批量导入别名"""
+        imported = 0
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            for item in aliases_data:
+                alias_type = item.get("alias_type", "character")
+                original_name = item.get("original_name", "")
+                alias = item.get("alias", "")
+                if original_name and alias:
+                    try:
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO character_aliases (alias_type, original_name, alias) VALUES (?, ?, ?)",
+                            (alias_type, original_name, alias)
+                        )
+                        if cursor.rowcount > 0:
+                            imported += 1
+                    except:
+                        pass
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return imported
+
+    def get_alias_count(self) -> int:
+        """获取别名总数"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM character_aliases")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    def get_original_names_by_alias(self, keyword: str, alias_type: str = None) -> list:
+        """通过别名获取原始名称列表"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        pattern = f"%{keyword}%"
+        
+        if alias_type:
+            cursor.execute(
+                "SELECT DISTINCT original_name FROM character_aliases WHERE alias_type = ? AND alias LIKE ?",
+                (alias_type, pattern)
+            )
+        else:
+            cursor.execute(
+                "SELECT DISTINCT original_name FROM character_aliases WHERE alias LIKE ?",
+                (pattern,)
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def get_work_original_names_by_alias(self, keyword: str) -> list:
+        """通过别名获取作品原始名称列表"""
+        return self.get_original_names_by_alias(keyword, alias_type="work")
+
+    def _simplify_chinese(self, text: str) -> str:
+        """简繁转换"""
+        if not text:
+            return text
+        replacements = {
+            '夢': '梦', '澤': '泽', '穂': '穗', '亜': '亚',
+            '桜': '樱', '姫': '姬', '稲': '稻', '葉': '叶',
+            '館': '馆', '黒': '黑', '麥': '麦', '開發': '开发',
+            '圍': '围', '戰': '战', '裡': '里', '說': '说',
+            '與': '与', '為': '为', '個': '个', '們': '们',
+            '這': '这', '那': '那', '來': '来', '時': '时',
+            '會': '会', '過': '过', '還': '还', '後': '后',
+            '樓': '楼', '間': '间', '問': '问', '長': '长',
+            '門': '门', '開': '开', '關': '关', '頭': '头',
+            '臉': '脸', '話': '话', '聲': '声', '聽': '听',
+            '寫': '写', '記': '记', '讓': '让', '給': '给',
+            '対': '对', '錯': '错', '嗎': '吗', '呢': '呢',
+            '吧': '吧', '嗎': '吗', '哦': '哦', '呀': '呀',
+            '辺': '边', '巻': '卷', '査': '查', '対': '对',
+            '歩': '步', '説': '说', '晩': '晚', '悪': '恶',
+            '徳': '德', '経': '经', '営': '营', '処': '处',
+            '挙': '举', '関': '关', '満': '满', '発': '发',
+            '給': '给', '記': '记', '認': '认', '変': '变',
+            '報': '报', '豊': '丰', '節': '节', '約': '约',
+            '級': '级', '収': '收', '討': '讨', '講': '讲',
+            '獄': '狱', '険': '险', '階': '阶', '帯': '带',
+            '陸': '陆', '隊': '队', '陽': '阳', '陰': '阴',
+            '毎': '每', '指示': '指示', '作成': '作成',
+        }
+        result = text
+        for old, new in replacements.items():
+            result = result.replace(old, new)
+        return result
+
+    def _traditionalize(self, text: str) -> str:
+        """繁化转换"""
+        if not text:
+            return text
+        replacements = {
+            '梦': '夢', '泽': '澤', '穗': '穂', '亚': '亜',
+            '樱': '桜', '姬': '姫', '稻': '稲', '叶': '葉',
+            '馆': '館', '黑': '黒', '麦': '麥', '开发': '開發',
+            '围': '圍', '战': '戰', '里': '裡', '说': '說',
+            '与': '與', '为': '為', '个': '個', '们': '們',
+            '这': '這', '那': '那', '来': '來', '时': '時',
+            '会': '會', '过': '過', '还': '還', '后': '後',
+            '楼': '樓', '间': '間', '问': '問', '长': '長',
+            '门': '門', '开': '開', '关': '關', '头': '頭',
+            '脸': '臉', '话': '話', '声': '聲', '听': '聽',
+            '写': '寫', '记': '記', '让': '讓', '给': '給',
+            '对': '対', '错': '錯', '吗': '嗎', '呢': '呢',
+        }
+        result = text
+        for old, new in replacements.items():
+            result = result.replace(old, new)
+        return result
+
+    def _build_search_conditions(self, keyword: str) -> tuple:
+        """构建搜索条件和参数"""
+        conditions = []
+        params = []
+        
+        # 1. 直接匹配用户输入
+        pattern = f"%{keyword}%"
+        conditions.append("(character LIKE ? OR ai_detect LIKE ? OR tags LIKE ? OR description LIKE ?)")
+        params.extend([pattern, pattern, pattern, pattern])
+        
+        # 2. 用户输入的简繁转换
+        simplified = self._simplify_chinese(keyword)
+        if simplified != keyword:
+            s_pattern = f"%{simplified}%"
+            conditions.append("(character LIKE ? OR ai_detect LIKE ?)")
+            params.extend([s_pattern, s_pattern])
+        
+        traditional = self._traditionalize(keyword)
+        if traditional != keyword and traditional != simplified:
+            t_pattern = f"%{traditional}%"
+            conditions.append("(character LIKE ? OR ai_detect LIKE ?)")
+            params.extend([t_pattern, t_pattern])
+        
+        # 3. 角色别名 → 原始名
+        char_original_names = self.get_original_names_by_alias(keyword, "character")
+        for orig_name in char_original_names:
+            conditions.append("character LIKE ?")
+            params.append(f"%{orig_name}%")
+            # 原始名的简繁转换
+            s_name = self._simplify_chinese(orig_name)
+            if s_name != orig_name:
+                conditions.append("character LIKE ?")
+                params.append(f"%{s_name}%")
+            # 原始名的繁化
+            t_name = self._traditionalize(orig_name)
+            if t_name != orig_name and t_name != s_name:
+                conditions.append("character LIKE ?")
+                params.append(f"%{t_name}%")
+        
+        # 4. 作品别名 → 原始名 (搜索 character 字段中的作品名)
+        work_original_names = self.get_work_original_names_by_alias(keyword)
+        for orig_name in work_original_names:
+            # 匹配 [作品名] 格式
+            conditions.append("character LIKE ?")
+            params.append(f"%[{orig_name}]%")
+            # 作品名简繁
+            s_name = self._simplify_chinese(orig_name)
+            if s_name != orig_name:
+                conditions.append("character LIKE ?")
+                params.append(f"%[{s_name}]%")
+        
+        return conditions, params
+
+    def search_character_random_with_alias(self, keyword: str, limit: int = 1) -> list:
+        """模糊搜索角色(含作品)并随机选取，支持别名匹配"""
+        conditions, params = self._build_search_conditions(keyword)
+        
+        where_clause = " OR ".join(conditions)
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT * FROM images WHERE {where_clause} ORDER BY RANDOM() LIMIT ?",
+            params + [limit]
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def search_all_random_with_alias(self, keyword: str, limit: int = 1) -> list:
+        """模糊搜索标签、描述和角色(含作品)并随机选取，支持别名匹配"""
+        conditions, params = self._build_search_conditions(keyword)
+        
+        where_clause = " OR ".join(conditions)
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT * FROM images WHERE {where_clause} ORDER BY RANDOM() LIMIT ?",
+            params + [limit]
+        )
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]

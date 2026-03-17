@@ -30,20 +30,61 @@
                 </div>
             </header>
 
-            <div class="search-bar">
-                <input type="text" id="search-tag" placeholder="搜索标签...">
-                <input type="text" id="search-character" placeholder="搜索角色...">
-                <input type="text" id="search-description" placeholder="搜索描述...">
-                <button id="search-btn">搜索</button>
-                <button id="clear-search-btn" class="btn-secondary">清除</button>
+            <nav class="tab-nav">
+                <button class="tab-btn active" data-tab="images">图片管理</button>
+                <button class="tab-btn" data-tab="aliases">别名管理</button>
+            </nav>
+
+            <div id="tab-images" class="tab-content">
+                <div class="search-bar">
+                    <input type="text" id="search-tag" placeholder="搜索标签...">
+                    <input type="text" id="search-character" placeholder="搜索角色...">
+                    <input type="text" id="search-description" placeholder="搜索描述...">
+                    <button id="search-btn">搜索</button>
+                    <button id="clear-search-btn" class="btn-secondary">清除</button>
+                </div>
+
+                <div id="image-grid" class="image-grid"></div>
+                
+                <div class="pagination">
+                    <button id="prev-page" class="btn-secondary">上一页</button>
+                    <span id="page-info">第 1 页</span>
+                    <button id="next-page" class="btn-secondary">下一页</button>
+                </div>
             </div>
 
-            <div id="image-grid" class="image-grid"></div>
-            
-            <div class="pagination">
-                <button id="prev-page" class="btn-secondary">上一页</button>
-                <span id="page-info">第 1 页</span>
-                <button id="next-page" class="btn-secondary">下一页</button>
+            <div id="tab-aliases" class="tab-content hidden">
+                <div class="alias-toolbar">
+                    <input type="text" id="search-alias" placeholder="搜索别名...">
+                    <select id="alias-type-filter">
+                        <option value="">全部类型</option>
+                        <option value="character">角色</option>
+                        <option value="work">作品</option>
+                    </select>
+                    <select id="alias-page-size">
+                        <option value="25">25条/页</option>
+                        <option value="50">50条/页</option>
+                        <option value="100">100条/页</option>
+                    </select>
+                    <button id="search-alias-btn" class="btn-primary">搜索</button>
+                    <button id="import-alias-btn" class="btn-warning">从文件导入</button>
+                    <button id="add-alias-btn" class="btn-primary">添加别名</button>
+                </div>
+                <div id="import-progress" class="import-progress hidden">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="progress-text">导入中...</span>
+                        <button id="stop-import-btn" class="btn-danger btn-sm">停止</button>
+                    </div>
+                </div>
+                <div id="alias-list" class="alias-list"></div>
+                <div class="alias-pagination">
+                    <button id="alias-prev-page" class="btn-secondary">上一页</button>
+                    <span id="alias-page-info">第 1 页</span>
+                    <button id="alias-next-page" class="btn-secondary">下一页</button>
+                </div>
             </div>
         </div>
 
@@ -93,6 +134,35 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- 添加别名弹窗 -->
+        <div id="alias-modal" class="modal hidden">
+            <div class="modal-content modal-small">
+                <span class="close-alias">&times;</span>
+                <h2>添加别名</h2>
+                <form id="add-alias-form">
+                    <div class="form-group">
+                        <label>类型:</label>
+                        <select id="alias-type">
+                            <option value="character">角色</option>
+                            <option value="work">作品</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>原名(日文/英文):</label>
+                        <input type="text" id="alias-original" placeholder="例如: 鳴瀬白羽" required>
+                    </div>
+                    <div class="form-group">
+                        <label>别名(中文/简体):</label>
+                        <input type="text" id="alias-name" placeholder="例如: 鸣濑白羽" required>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">添加</button>
+                        <button type="button" id="cancel-alias-btn" class="btn-secondary">取消</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>

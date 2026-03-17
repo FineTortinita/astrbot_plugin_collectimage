@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -28,7 +29,61 @@ class CollectImagePlugin(Star):
         self.web_server = None
         self._init_web_server()
         
+        asyncio.create_task(self._init_aliases_async())
+        
         logger.info(f"[CollectImage] 插件已加载，图片目录: {self.images_dir}")
+
+    async def _init_aliases_async(self):
+        """异步初始化别名库"""
+        alias_count = self.db.get_alias_count()
+        if alias_count > 0:
+            logger.info(f"[CollectImage] 数据库已有 {alias_count} 个别名，跳过导入")
+            return
+        
+        aliases_path = os.path.join(self.plugin_dir, "aliases.json")
+        if not os.path.exists(aliases_path):
+            logger.info("[CollectImage] 别名库文件不存在，跳过导入")
+            return
+        
+        try:
+            with open(aliases_path, 'r', encoding='utf-8') as f:
+                aliases_data = json.load(f)
+            
+            if not aliases_data.get("character") and not aliases_data.get("work"):
+                logger.info("[CollectImage] 别名库为空，跳过导入")
+                return
+            
+            all_aliases = []
+            for alias_type, aliases_dict in aliases_data.items():
+                if alias_type in ("description", "version"):
+                    continue
+                if isinstance(aliases_dict, dict):
+                    for original_name, alias_list in aliases_dict.items():
+                        if isinstance(alias_list, list):
+                            for alias in alias_list:
+                                if alias:
+                                    all_aliases.append((alias_type, original_name, alias))
+            
+            total = len(all_aliases)
+            logger.info(f"[CollectImage] 开始异步导入 {total} 个别名...")
+            
+            imported = 0
+            batch_size = 100
+            
+            for i in range(0, len(all_aliases), batch_size):
+                batch = all_aliases[i:i + batch_size]
+                for alias_type, original_name, alias in batch:
+                    try:
+                        self.db.add_alias(alias_type, original_name, alias)
+                        imported += 1
+                    except:
+                        pass
+                
+                await asyncio.sleep(0.5)
+            
+            logger.info(f"[CollectImage] 异步导入完成，共 {imported} 个别名")
+        except Exception as e:
+            logger.error(f"[CollectImage] 导入别名失败: {e}")
 
     def _init_web_server(self):
         webui_enabled = getattr(self.config, 'webui_enabled', False)
@@ -421,12 +476,12 @@ class CollectImagePlugin(Star):
         if count > 10:
             count = 10
         
-        # 优先搜索角色
-        results = self.db.search_character_random(keyword=keyword, limit=count)
+        # 优先搜索角色（含别名匹配）
+        results = self.db.search_character_random_with_alias(keyword=keyword, limit=count)
         
-        # 角色没找到再搜索标签和描述
+        # 角色没找到再搜索标签和描述（含别名匹配）
         if not results:
-            results = self.db.search_all_random(keyword=keyword, limit=count)
+            results = self.db.search_all_random_with_alias(keyword=keyword, limit=count)
         
         if not results:
             yield event.plain_result(f"未找到包含「{keyword}」的图片")

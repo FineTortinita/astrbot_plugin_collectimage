@@ -33,6 +33,13 @@ class WebServer:
 
         self._cookie_name = "collectimage_webui_session"
         self._sessions: dict[str, float] = {}
+        
+        self._import_state = {
+            "running": False,
+            "total": 0,
+            "imported": 0,
+            "stop_requested": False
+        }
 
         self._setup_routes()
 
@@ -47,6 +54,13 @@ class WebServer:
         self.app.router.add_delete("/api/images/{image_id}", self.handle_delete_image)
         self.app.router.add_post("/api/images/{image_id}/reanalyze", self.handle_reanalyze)
         self.app.router.add_post("/api/images/{image_id}/recognize_character", self.handle_recognize_character)
+
+        self.app.router.add_get("/api/aliases", self.handle_list_aliases)
+        self.app.router.add_post("/api/aliases", self.handle_add_alias)
+        self.app.router.add_delete("/api/aliases/{alias_id}", self.handle_delete_alias)
+        self.app.router.add_post("/api/aliases/import", self.handle_import_aliases)
+        self.app.router.add_get("/api/aliases/import/status", self.handle_import_status)
+        self.app.router.add_post("/api/aliases/import/stop", self.handle_import_stop)
 
         self.app.router.add_get("/api/stats", self.handle_get_stats)
         self.app.router.add_get("/api/health", self.handle_health_check)
@@ -298,6 +312,183 @@ class WebServer:
         except Exception as e:
             logger.error(f"[CollectImage] 加载图片失败: {e}")
             return web.Response(text=str(e), status=500)
+
+    async def handle_list_aliases(self, request: web.Request) -> web.Response:
+        """获取别名列表"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        alias_type = request.query.get("type")
+        search = request.query.get("search")
+        page = int(request.query.get("page", 1))
+        page_size = int(request.query.get("page_size", 25))
+        
+        if page < 1:
+            page = 1
+        if page_size not in [25, 50, 100]:
+            page_size = 25
+        
+        offset = (page - 1) * page_size
+        
+        try:
+            if search:
+                all_aliases = self.plugin.db.search_alias(search)
+            elif alias_type:
+                all_aliases = self.plugin.db.get_aliases_by_type(alias_type)
+            else:
+                all_aliases = self.plugin.db.get_all_aliases()
+            
+            total = len(all_aliases)
+            total_pages = (total + page_size - 1) // page_size
+            paginated_aliases = all_aliases[offset:offset + page_size]
+            
+            return self._ok({
+                "aliases": paginated_aliases, 
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages
+            })
+        except Exception as e:
+            logger.error(f"[CollectImage] 获取别名列表失败: {e}")
+            return self._err(str(e))
+
+    async def handle_add_alias(self, request: web.Request) -> web.Response:
+        """添加别名"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        try:
+            data = await request.json()
+            alias_type = data.get("alias_type", "character")
+            original_name = data.get("original_name", "")
+            alias = data.get("alias", "")
+            
+            if not original_name or not alias:
+                return self._err("缺少必要参数")
+            
+            success = self.plugin.db.add_alias(alias_type, original_name, alias)
+            if success:
+                return self._ok({"message": "添加成功"})
+            else:
+                return self._err("添加失败，可能已存在")
+        except Exception as e:
+            logger.error(f"[CollectImage] 添加别名失败: {e}")
+            return self._err(str(e))
+
+    async def handle_delete_alias(self, request: web.Request) -> web.Response:
+        """删除别名"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        try:
+            alias_id = int(request.match_info["alias_id"])
+            success = self.plugin.db.delete_alias(alias_id)
+            if success:
+                return self._ok({"message": "删除成功"})
+            else:
+                return self._err("删除失败")
+        except Exception as e:
+            logger.error(f"[CollectImage] 删除别名失败: {e}")
+            return self._err(str(e))
+
+    async def handle_import_aliases(self, request: web.Request) -> web.Response:
+        """批量导入别名"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        if self._import_state["running"]:
+            return self._err("导入正在进行中")
+        
+        try:
+            import json
+            import os
+            import asyncio
+            
+            aliases_path = os.path.join(self.plugin.plugin_dir, "aliases.json")
+            
+            if not os.path.exists(aliases_path):
+                return self._err("aliases.json 文件不存在")
+            
+            with open(aliases_path, 'r', encoding='utf-8') as f:
+                aliases_data = json.load(f)
+            
+            all_aliases = []
+            for alias_type, aliases_dict in aliases_data.items():
+                if alias_type in ("description", "version"):
+                    continue
+                if isinstance(aliases_dict, dict):
+                    for original_name, alias_list in aliases_dict.items():
+                        if isinstance(alias_list, list):
+                            for alias in alias_list:
+                                if alias:
+                                    all_aliases.append((alias_type, original_name, alias))
+            
+            total = len(all_aliases)
+            self._import_state = {
+                "running": True,
+                "total": total,
+                "imported": 0,
+                "stop_requested": False
+            }
+            
+            asyncio.create_task(self._run_import(all_aliases))
+            
+            return self._ok({"message": f"开始导入 {total} 个别名"})
+        except Exception as e:
+            logger.error(f"[CollectImage] 导入别名失败: {e}")
+            return self._err(str(e))
+
+    async def _run_import(self, all_aliases: list):
+        """异步执行导入"""
+        imported = 0
+        batch_size = 100
+        
+        for i in range(0, len(all_aliases), batch_size):
+            if self._import_state["stop_requested"]:
+                logger.info("[CollectImage] 导入已停止")
+                break
+            
+            batch = all_aliases[i:i + batch_size]
+            for alias_type, original_name, alias in batch:
+                if self._import_state["stop_requested"]:
+                    break
+                try:
+                    self.plugin.db.add_alias(alias_type, original_name, alias)
+                    imported += 1
+                except:
+                    pass
+            
+            self._import_state["imported"] = imported
+            
+            await asyncio.sleep(0.5)
+        
+        self._import_state["running"] = False
+        self._import_state["imported"] = imported
+        logger.info(f"[CollectImage] 导入完成，共 {imported} 个别名")
+
+    async def handle_import_status(self, request: web.Request) -> web.Response:
+        """获取导入状态"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        return self._ok({
+            "running": self._import_state["running"],
+            "total": self._import_state["total"],
+            "imported": self._import_state["imported"],
+            "progress": round(self._import_state["imported"] / self._import_state["total"] * 100, 1) if self._import_state["total"] > 0 else 0
+        })
+
+    async def handle_import_stop(self, request: web.Request) -> web.Response:
+        """停止导入"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        if not self._import_state["running"]:
+            return self._err("没有正在进行的导入")
+        
+        self._import_state["stop_requested"] = True
+        return self._ok({"message": "已请求停止导入"})
 
     async def start(self):
         if self._started:

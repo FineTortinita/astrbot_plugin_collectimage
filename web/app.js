@@ -333,3 +333,288 @@ function showMainPage() {
     loginPage.classList.add('hidden');
     mainPage.classList.remove('hidden');
 }
+
+// 标签切换
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tabName = btn.dataset.tab;
+        
+        // 更新按钮状态
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        // 更新内容显示
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.add('hidden');
+        });
+        document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+        
+        // 如果切换到别名管理，加载别名列表
+        if (tabName === 'aliases') {
+            aliasCurrentPage = 1;
+            loadAliases();
+        }
+    });
+});
+
+// 别名管理
+const aliasModal = document.getElementById('alias-modal');
+
+let aliasCurrentPage = 1;
+let aliasTotalPages = 1;
+let aliasPageSize = 25;
+let aliasTotal = 0;
+
+// 加载别名列表
+async function loadAliases() {
+    const search = document.getElementById('search-alias').value;
+    const typeFilter = document.getElementById('alias-type-filter').value;
+    aliasPageSize = parseInt(document.getElementById('alias-page-size').value);
+    
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (typeFilter) params.append('type', typeFilter);
+    params.append('page', aliasCurrentPage);
+    params.append('page_size', aliasPageSize);
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/aliases?${params}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            aliasTotal = data.total;
+            aliasTotalPages = data.total_pages;
+            renderAliases(data.aliases);
+            updateAliasPagination();
+        }
+    } catch (e) {
+        console.error('加载别名失败:', e);
+    }
+}
+
+// 更新分页信息
+function updateAliasPagination() {
+    document.getElementById('alias-page-info').textContent = 
+        `第 ${aliasCurrentPage} / ${aliasTotalPages} 页 (共 ${aliasTotal} 条)`;
+    document.getElementById('alias-prev-page').disabled = aliasCurrentPage <= 1;
+    document.getElementById('alias-next-page').disabled = aliasCurrentPage >= aliasTotalPages;
+}
+
+// 别名分页事件
+document.getElementById('alias-prev-page').addEventListener('click', () => {
+    if (aliasCurrentPage > 1) {
+        aliasCurrentPage--;
+        loadAliases();
+    }
+});
+
+document.getElementById('alias-next-page').addEventListener('click', () => {
+    if (aliasCurrentPage < aliasTotalPages) {
+        aliasCurrentPage++;
+        loadAliases();
+    }
+});
+
+document.getElementById('alias-page-size').addEventListener('change', () => {
+    aliasCurrentPage = 1;
+    loadAliases();
+});
+
+// 渲染别名列表
+function renderAliases(aliases) {
+    const aliasList = document.getElementById('alias-list');
+    aliasList.innerHTML = '';
+    
+    if (aliases.length === 0) {
+        aliasList.innerHTML = '<p style="text-align:center;padding:40px;color:#666;">暂无别名</p>';
+        return;
+    }
+    
+    aliases.forEach(alias => {
+        const item = document.createElement('div');
+        item.className = 'alias-item';
+        item.innerHTML = `
+            <span class="alias-type ${alias.alias_type}">${alias.alias_type === 'character' ? '角色' : '作品'}</span>
+            <span class="alias-original">${alias.original_name}</span>
+            <span class="arrow">→</span>
+            <span class="alias-name">${alias.alias}</span>
+            <button class="delete-alias-btn" data-id="${alias.id}">删除</button>
+        `;
+        
+        item.querySelector('.delete-alias-btn').addEventListener('click', async (e) => {
+            if (!confirm('确定要删除这个别名吗？')) return;
+            
+            const aliasId = e.target.dataset.id;
+            try {
+                const response = await fetch(`${API_BASE}/api/aliases/${aliasId}`, {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('删除成功');
+                    loadAliases();
+                } else {
+                    alert('删除失败: ' + data.error);
+                }
+            } catch (e) {
+                alert('删除失败: ' + e);
+            }
+        });
+        
+        aliasList.appendChild(item);
+    });
+}
+
+// 搜索别名
+document.getElementById('search-alias-btn').addEventListener('click', () => {
+    aliasCurrentPage = 1;
+    loadAliases();
+});
+
+// 回车搜索别名
+document.getElementById('search-alias').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        aliasCurrentPage = 1;
+        loadAliases();
+    }
+});
+
+// 筛选类型变化时重新加载
+document.getElementById('alias-type-filter').addEventListener('change', () => {
+    aliasCurrentPage = 1;
+    loadAliases();
+});
+
+let importPollInterval = null;
+
+// 从文件导入别名
+document.getElementById('import-alias-btn').addEventListener('click', async () => {
+    if (!confirm('确定要从 aliases.json 导入别名吗？')) return;
+    
+    const btn = document.getElementById('import-alias-btn');
+    btn.disabled = true;
+    btn.textContent = '启动中...';
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/aliases/import`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            btn.textContent = '导入中...';
+            document.getElementById('import-progress').classList.remove('hidden');
+            startImportPoll();
+        } else {
+            alert('导入失败: ' + data.error);
+            btn.disabled = false;
+            btn.textContent = '从文件导入';
+        }
+    } catch (e) {
+        alert('导入失败: ' + e);
+        btn.disabled = false;
+        btn.textContent = '从文件导入';
+    }
+});
+
+function startImportPoll() {
+    if (importPollInterval) clearInterval(importPollInterval);
+    
+    importPollInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`${API_BASE}/api/aliases/import/status`);
+            const data = await response.json();
+            
+            if (data.success) {
+                const progress = data.progress || 0;
+                document.getElementById('progress-fill').style.width = progress + '%';
+                document.getElementById('progress-text').textContent = 
+                    `导入中: ${data.imported} / ${data.total} (${progress}%)`;
+                
+                if (!data.running) {
+                    clearInterval(importPollInterval);
+                    importPollInterval = null;
+                    
+                    document.getElementById('import-progress').classList.add('hidden');
+                    document.getElementById('progress-fill').style.width = '0%';
+                    
+                    const btn = document.getElementById('import-alias-btn');
+                    btn.disabled = false;
+                    btn.textContent = '从文件导入';
+                    
+                    alert(`导入完成: 共导入 ${data.imported} 个别名`);
+                    loadAliases();
+                }
+            }
+        } catch (e) {
+            console.error('获取进度失败:', e);
+        }
+    }, 500);
+}
+
+// 停止导入
+document.getElementById('stop-import-btn').addEventListener('click', async () => {
+    if (!confirm('确定要停止导入吗？')) return;
+    
+    try {
+        await fetch(`${API_BASE}/api/aliases/import/stop`, {
+            method: 'POST'
+        });
+    } catch (e) {
+        console.error('停止导入失败:', e);
+    }
+});
+
+// 添加别名按钮
+document.getElementById('add-alias-btn').addEventListener('click', () => {
+    aliasModal.classList.remove('hidden');
+});
+
+// 关闭添加别名弹窗
+document.querySelector('.close-alias').addEventListener('click', () => {
+    aliasModal.classList.add('hidden');
+});
+
+document.getElementById('cancel-alias-btn').addEventListener('click', () => {
+    aliasModal.classList.add('hidden');
+});
+
+aliasModal.addEventListener('click', (e) => {
+    if (e.target === aliasModal) {
+        aliasModal.classList.add('hidden');
+    }
+});
+
+// 提交添加别名表单
+document.getElementById('add-alias-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const aliasType = document.getElementById('alias-type').value;
+    const originalName = document.getElementById('alias-original').value;
+    const aliasName = document.getElementById('alias-name').value;
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/aliases`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                alias_type: aliasType,
+                original_name: originalName,
+                alias: aliasName
+            })
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            alert('添加成功');
+            aliasModal.classList.add('hidden');
+            document.getElementById('add-alias-form').reset();
+            loadAliases();
+        } else {
+            alert('添加失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('添加失败: ' + e);
+    }
+});
