@@ -311,14 +311,20 @@ class CollectImagePlugin(Star):
                 "description": ""
             }
 
-    async def recognize_character(self, image_url: str) -> dict:
+    async def recognize_character(self, image_url: str, image_base64: str = None) -> dict:
         """调用 AnimeTrace API 识别角色，返回完整结果"""
         import aiohttp
         import json as json_module
         try:
             async with aiohttp.ClientSession() as session:
                 form = aiohttp.FormData()
-                form.add_field('url', image_url)
+                
+                # 优先使用 base64，其次使用 url
+                if image_base64:
+                    form.add_field('base64', image_base64)
+                else:
+                    form.add_field('url', image_url)
+                
                 form.add_field('model', 'animetrace_high_beta')
                 form.add_field('is_multi', '1')
                 form.add_field('ai_detect', '1')
@@ -348,6 +354,17 @@ class CollectImagePlugin(Star):
                     
         except Exception as e:
             logger.error(f"[CollectImage] 角色识别异常: {e}")
+            return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
+
+    async def recognize_character_from_file(self, file_path: str) -> dict:
+        """从本地文件识别角色（使用 base64 上传）"""
+        import base64
+        try:
+            with open(file_path, 'rb') as f:
+                image_base64 = base64.b64encode(f.read()).decode('utf-8')
+            return await self.recognize_character(image_url=None, image_base64=image_base64)
+        except Exception as e:
+            logger.error(f"[CollectImage] 读取图片文件失败: {e}")
             return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
 
     def _extract_person_count(self, tags: dict) -> int:

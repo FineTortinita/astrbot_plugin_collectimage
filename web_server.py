@@ -234,19 +234,33 @@ class WebServer:
         if not image:
             return self._err("图片不存在", 404)
         
-        image_url = image.get("file_path")
-        if not image_url:
+        image_path = image.get("file_path")
+        if not image_path:
             return self._err("图片路径不存在", 404)
         
         try:
-            # 使用 file:// 协议调用本地文件
-            result = await self.plugin.recognize_character(f"file://{image_url}")
-            self.plugin.db.update_image(
-                image_id=image_id,
-                character=result.get("character"),
-            )
-            return self._ok({"result": result})
+            # 使用本地文件 base64 方式识别
+            result = await self.plugin.recognize_character_from_file(image_path)
+            
+            # 根据人数提取角色
+            tags = image.get("tags")
+            if tags:
+                try:
+                    import json
+                    if isinstance(tags, str):
+                        tags = json.loads(tags)
+                except:
+                    pass
+            
+            person_count = self.plugin._extract_person_count(tags) if tags else 1
+            character = self.plugin._extract_characters_by_count(result.get("all_results", []), person_count)
+            
+            # 更新数据库
+            self.plugin.db.update_character(image_id, character)
+            
+            return self._ok({"result": result, "character": character})
         except Exception as e:
+            logger.error(f"[CollectImage WebUI] 角色识别失败: {e}")
             return self._err(f"角色识别失败: {e}")
 
     async def handle_get_stats(self, request: web.Request) -> web.Response:
