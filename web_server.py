@@ -279,13 +279,32 @@ class WebServer:
             return self._err(f"角色识别失败: {e}")
 
     async def handle_cleanup(self, request: web.Request) -> web.Response:
-        """清理数据库中有记录但文件不存在的条目"""
+        """清理：1)数据库中有记录但文件不存在 2)文件存在但无数据库记录"""
         if not await self._check_auth(request):
             return self._err("Unauthorized", 401)
         
         try:
-            cleaned = self.plugin.db.cleanup_missing_files()
-            return self._ok({"cleaned": cleaned, "message": f"已清理 {cleaned} 条无效记录"})
+            data = await request.json() if request.can_read_body else {}
+            cleanup_type = data.get("type", "all")
+            
+            results = {}
+            
+            # 1. 清理数据库中有记录但文件不存在
+            if cleanup_type in ("db", "all"):
+                db_cleaned = self.plugin.db.cleanup_missing_files()
+                results["db_cleaned"] = db_cleaned
+            
+            # 2. 清理文件存在但无数据库记录
+            if cleanup_type in ("files", "all"):
+                files_cleaned = self.plugin.db.cleanup_orphaned_files(self.plugin.images_dir)
+                results["files_cleaned"] = files_cleaned
+            
+            total = results.get("db_cleaned", 0) + results.get("files_cleaned", 0)
+            return self._ok({
+                "cleaned": total,
+                "details": results,
+                "message": f"已清理 {total} 条记录 (数据库:{results.get('db_cleaned', 0)}, 文件:{results.get('files_cleaned', 0)})"
+            })
         except Exception as e:
             logger.error(f"[CollectImage] 清理失败: {e}")
             return self._err(str(e))

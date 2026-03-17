@@ -245,6 +245,33 @@ class Database:
             pass
         return cleaned
 
+    def cleanup_orphaned_files(self, images_dir: str) -> int:
+        """清理images目录下没有数据库记录的文件，返回清理数量"""
+        import os
+        cleaned = 0
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # 获取所有数据库中的文件路径
+            cursor.execute("SELECT file_path FROM images")
+            db_paths = {row[0] for row in cursor.fetchall() if row[0]}
+            conn.close()
+            
+            # 扫描images目录
+            if os.path.exists(images_dir):
+                for filename in os.listdir(images_dir):
+                    file_path = os.path.join(images_dir, filename)
+                    if os.path.isfile(file_path) and file_path not in db_paths:
+                        try:
+                            os.remove(file_path)
+                            cleaned += 1
+                        except:
+                            pass
+        except Exception:
+            pass
+        return cleaned
+
     def search_images(
         self,
         tag: str = None,
