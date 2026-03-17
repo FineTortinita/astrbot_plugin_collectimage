@@ -287,8 +287,7 @@ document.getElementById('recognize-btn').addEventListener('click', async () => {
         const data = await response.json();
         
         if (data.success) {
-            const result = data.result;
-            alert(`角色识别完成\n角色: ${result.character}\nAI检测: ${result.ai_detect}`);
+            alert(`角色识别完成\n角色: ${data.character}\nAI检测: ${data.result?.ai_detect || 'unknown'}`);
             openDetail(currentImageId);
             loadImages();
         } else {
