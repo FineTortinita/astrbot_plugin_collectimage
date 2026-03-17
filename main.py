@@ -242,30 +242,39 @@ class CollectImagePlugin(Star):
 
     async def _process_forward_node(self, node: Node, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
         """处理合并转发消息节点"""
+        logger.info(f"[CollectImage] 检测到合并转发消息节点, node.id={node.id}, content长度={len(node.content) if node.content else 0}")
+        
         # 情况1: Node 有 id 字段，需要调用 API 获取实际内容
         if node.id:
             forward_id = node.id
             bot = getattr(event, 'bot', None)
+            logger.info(f"[CollectImage] 获取到 bot 对象: {bot}")
             if bot and hasattr(bot, 'api'):
                 try:
+                    logger.info(f"[CollectImage] 调用 get_forward_msg API, id={forward_id}")
                     result = await bot.api.call_action('get_forward_msg', id=str(forward_id))
+                    logger.info(f"[CollectImage] get_forward_msg 返回: {result}")
                     messages = result.get('messages', []) if isinstance(result, dict) else []
                 except Exception as e:
                     logger.error(f"[CollectImage] 获取转发消息失败: {e}")
                     return
             else:
-                logger.warning("[CollectImage] 无法获取 bot 对象，跳过转发消息")
+                logger.warning("[CollectImage] 无法获取 bot 对象或 api，跳过转发消息")
                 return
         else:
             # 情况2: Node 已有 content 内容
             messages = [{'message': node.content}]
+            logger.info(f"[CollectImage] 使用 node.content，内容: {node.content}")
 
         # 解析消息节点，提取图片
         for msg_item in messages:
             message_content = msg_item.get('message', [])
             if not isinstance(message_content, list):
+                logger.warning(f"[CollectImage] message_content 不是列表: {type(message_content)}")
                 continue
+            logger.info(f"[CollectImage] 解析消息节点，内容条数: {len(message_content)}")
             for segment in message_content:
+                logger.info(f"[CollectImage] 消息段类型: {type(segment)}, {segment}")
                 if isinstance(segment, Image):
                     await self._process_single_image(segment, event, group_id, sender_id, 0)
                 elif isinstance(segment, Node):
