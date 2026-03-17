@@ -180,20 +180,28 @@ class CollectImagePlugin(Star):
                     shutil.copy(local_path, image_path)
                     logger.info(f"[CollectImage] 图片已保存: {image_path}")
 
-                    # 调用 AnimeTrace API 识别角色
                     image_url = msg.url or msg.file
                     if image_url:
-                        # 先进行 VLM 分析
+                        # 1. 先调用 AnimeTrace 获取所有角色结果
+                        char_result = await self.recognize_character(image_url)
+                        all_results = char_result.get("all_results", [])
+                        ai_detect = char_result.get("ai_detect", "")
+                        
+                        # 2. VLM 分析获取 tags
                         result = await self.analyze_image(image_url, event)
                         
                         if result.get("filter_result") != "有效":
                             logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
                             continue
                         
-                        # 调用 AnimeTrace API 识别角色
-                        char_result = await self.recognize_character(image_url)
-                        character = char_result.get("character", "未知")
-                        ai_detect = char_result.get("ai_detect", "")
+                        # 3. 根据人数提取对应数量的角色
+                        person_count = self._extract_person_count(result.get("tags", {}))
+                        character = self._extract_characters_by_count(all_results, person_count)
+                        
+                        # 保存完整角色结果到 ai_detect（追加）
+                        import json as json_module
+                        if all_results:
+                            ai_detect = json_module.dumps(all_results, ensure_ascii=False)
                         
                         self.db.insert_image(
                             file_hash=file_hash,
@@ -207,7 +215,7 @@ class CollectImagePlugin(Star):
                             description=result.get("description"),
                             ai_detect=ai_detect,
                         )
-                        logger.info(f"[CollectImage] 分析完成: {result}, 角色: {character}, AI检测: {ai_detect}")
+                        logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect[:50] if ai_detect else ''}")
 
                 except Exception as e:
                     logger.error(f"[CollectImage] 处理图片失败: {e}")
@@ -306,8 +314,9 @@ class CollectImagePlugin(Star):
             }
 
     async def recognize_character(self, image_url: str) -> dict:
-        """调用 AnimeTrace API 识别角色"""
+        """调用 AnimeTrace API 识别角色，返回完整结果"""
         import aiohttp
+        import json as json_module
         try:
             async with aiohttp.ClientSession() as session:
                 form = aiohttp.FormData()
@@ -323,23 +332,58 @@ class CollectImagePlugin(Star):
                 ) as resp:
                     if resp.status != 200:
                         logger.error(f"[CollectImage] 角色识别失败 HTTP: {resp.status}")
-                        return {"character": "未知", "ai_detect": "识别失败"}
+                        return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
                     
                     result = await resp.json()
                     
                     if result.get("code") != 17720:
                         logger.error(f"[CollectImage] 角色识别失败: {result.get('code')}")
-                        return {"character": "未知", "ai_detect": str(result.get("code", ""))}
+                        return {"character": "未知", "ai_detect": str(result.get("code", "")), "all_results": []}
                     
-                    character = result.get("data", {}).get("result", [{}])[0].get("name", "未知")
-                    ai_detect = result.get("data", {}).get("ai_detect", "")
+                    # 返回完整结果用于后续处理
+                    all_results = result.get("data", [])
+                    ai_detect = str(result.get("ai", ""))
                     
-                    logger.info(f"[CollectImage] 角色识别成功: {character}, AI检测: {ai_detect}")
-                    return {"character": character, "ai_detect": ai_detect}
+                    logger.info(f"[CollectImage] 角色识别成功，共 {len(all_results)} 个结果, AI检测: {ai_detect}")
+                    return {"character": "未知", "ai_detect": ai_detect, "all_results": all_results}
                     
         except Exception as e:
             logger.error(f"[CollectImage] 角色识别异常: {e}")
-            return {"character": "未知", "ai_detect": "识别失败"}
+            return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
+
+    def _extract_person_count(self, tags: dict) -> int:
+        """从 VLM 返回的 tags 中提取人数"""
+        gender_tags = tags.get("gender", [])
+        if not gender_tags:
+            return 1
+        
+        tag = gender_tags[0]
+        if tag in ["1girl", "1boy", "solo"]:
+            return 1
+        elif tag in ["2girls", "2boys"]:
+            return 2
+        elif tag in ["3girls", "3boys"]:
+            return 3
+        elif tag in ["multiple_girls", "multiple_boys", "group"]:
+            return 3
+        return 1
+
+    def _extract_characters_by_count(self, all_results: list, count: int) -> str:
+        """根据人数从 AnimeTrace 结果中提取对应数量的角色名"""
+        if not all_results or count <= 0:
+            return "未知"
+        
+        characters = []
+        for i, item in enumerate(all_results):
+            if i >= count:
+                break
+            char_list = item.get("character", [])
+            if char_list:
+                characters.append(char_list[0].get("character", ""))
+        
+        if not characters:
+            return "未知"
+        return ",".join(characters)
 
     @filter.command("moe")
     async def moe(self, event: AstrMessageEvent, keyword: str, count: int = 1):

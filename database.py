@@ -172,6 +172,21 @@ class Database:
         except Exception:
             return False
 
+    def update_character(self, image_id: int, character: str) -> bool:
+        """只更新 character 字段"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE images SET character = ? WHERE id = ?",
+                (character, image_id),
+            )
+            conn.commit()
+            conn.close()
+            return True
+        except Exception:
+            return False
+
     def delete_image(self, image_id: int) -> bool:
         try:
             conn = self._get_connection()
