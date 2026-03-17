@@ -1,0 +1,15 @@
+{
+  "id": "0481e7cb-0ae6-43bc-a6b5-73906f4ce643",
+  "status": "interrupted",
+  "startedAt": "2026-03-16T09:03:03.686Z",
+  "updatedAt": "2026-03-16T09:30:52.105Z",
+  "agentPlugin": "gemini",
+  "trackerPlugin": "json",
+  "prdPath": "./tasks/prd.json",
+  "currentIteration": 1,
+  "maxIterations": 10,
+  "totalTasks": 0,
+  "tasksCompleted": 0,
+  "cwd": "C:\\Users\\Administrator\\test-project\\AstrBot\\data\\plugins\\astrbot_plugin_collectimage",
+  "endedAt": "2026-03-16T09:30:52.104Z"
+}
