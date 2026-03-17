@@ -458,12 +458,18 @@ class CollectImagePlugin(Star):
         return 1
 
     def _extract_characters_by_count(self, all_results: list, count: int) -> str:
-        """根据人数从 AnimeTrace 结果中提取对应数量的角色名和作品，返回 JSON 数组"""
+        """根据人数从 AnimeTrace 结果中提取对应数量的角色名和作品，返回 JSON 数组
+        只取 not_confident: false 的结果，过滤误识别
+        """
         if not all_results or count <= 0:
             return "[]"
         
         characters = []
-        for i, item in enumerate(all_results):
+        
+        # 先过滤出置信的结果
+        confident_results = [item for item in all_results if not item.get("not_confident", False)]
+        
+        for i, item in enumerate(confident_results):
             if i >= count:
                 break
             char_list = item.get("character", [])
