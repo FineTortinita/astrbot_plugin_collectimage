@@ -120,6 +120,18 @@ class CollectImagePlugin(Star):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
+    def _check_image_size(self, file_path: str, min_size: int = 300) -> bool:
+        """检查图片尺寸，长或宽小于min_size返回False"""
+        try:
+            from PIL import Image
+            with Image.open(file_path) as img:
+                width, height = img.size
+                if width < min_size or height < min_size:
+                    return False
+                return True
+        except Exception:
+            return True
+
     def _is_sticker(self, img: Image, event: AstrMessageEvent | None = None, img_index: int = 0) -> bool:
         def is_emoji_summary(summary: object) -> bool:
             if not summary:
@@ -221,6 +233,12 @@ class CollectImagePlugin(Star):
                 
                 try:
                     local_path = await msg.convert_to_file_path()
+                    
+                    # 检查图片尺寸
+                    if not self._check_image_size(local_path):
+                        logger.info("[CollectImage] 图片尺寸过小，跳过")
+                        continue
+                    
                     file_hash = self._calculate_hash(local_path)
                     
                     if self.db.is_hash_exists(file_hash):
