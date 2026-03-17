@@ -464,15 +464,17 @@ class CollectImagePlugin(Star):
         return json.dumps(characters, ensure_ascii=False)
 
     @filter.command("moe")
-    async def moe(self, event: AstrMessageEvent, *args):
+    async def moe(self, event: AstrMessageEvent, args: str = ""):
         """搜索角色或标签的图片（模糊匹配+随机）"""
         # 解析参数: /moe <关键词> [数量]
         kw = ""
         count = 1
         
         if args:
-            kw = args[0] if len(args) > 0 else ""
-            count = int(args[1]) if len(args) > 1 else 1
+            parts = args.strip().split()
+            if parts:
+                kw = parts[0]
+                count = int(parts[1]) if len(parts) > 1 else 1
         
         if not kw or kw == "stats":
             total = self.db.count_images()
