@@ -14,7 +14,7 @@ from astrbot.core.message.components import Image, Forward
 from .database import Database
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.3.0")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.7.0")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -101,14 +101,9 @@ class CollectImagePlugin(Star):
                 logger.info("[CollectImage] 图片已存在，跳过")
                 return
             
-            timestamp = int(time.time())
-            ext = os.path.splitext(local_path)[1] or ".jpg"
-            image_filename = f"{timestamp}_{group_id}_{sender_id}{ext}"
-            image_path = os.path.join(self.images_dir, image_filename)
-            shutil.copy(local_path, image_path)
-            logger.info(f"[CollectImage] 图片已保存: {image_path}")
-
             image_url = msg.url or msg.file
+            
+            # 先 VLM 分析，无效则不保存
             if image_url:
                 result = await self.analyze_image(image_url, event)
                 
@@ -116,6 +111,15 @@ class CollectImagePlugin(Star):
                     logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
                     return
                 
+                # VLM 有效后再保存图片
+                timestamp = int(time.time())
+                ext = os.path.splitext(local_path)[1] or ".jpg"
+                image_filename = f"{timestamp}_{group_id}_{sender_id}{ext}"
+                image_path = os.path.join(self.images_dir, image_filename)
+                shutil.copy(local_path, image_path)
+                logger.info(f"[CollectImage] 图片已保存: {image_path}")
+                
+                # AnimeTrace 识别
                 char_result = await self.recognize_character(image_url)
                 all_results = char_result.get("all_results", [])
                 ai_detect = char_result.get("ai_detect", "")
@@ -159,6 +163,7 @@ class CollectImagePlugin(Star):
         logger.info(f"[CollectImage] 处理转发图片: {image_url}")
         
         try:
+            # 下载图片到临时位置
             async with aiohttp.ClientSession() as session:
                 async with session.get(image_url) as resp:
                     if resp.status != 200:
@@ -167,59 +172,76 @@ class CollectImagePlugin(Star):
                     
                     image_data = await resp.read()
             
-            timestamp = int(time.time())
-            file_ext = ".jpg"
-            image_filename = f"{timestamp}_{group_id}_{sender_id}_{uuid.uuid4().hex[:8]}{file_ext}"
-            image_path = os.path.join(self.images_dir, image_filename)
-            
-            with open(image_path, 'wb') as f:
-                f.write(image_data)
-            
-            logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
-            
-            file_hash = self._calculate_hash(image_path)
-            
-            if self.db.is_hash_exists(file_hash):
-                logger.info("[CollectImage] 转发图片已存在，跳过")
-                return
-            
-            if not self._check_image_size(image_path):
-                logger.info("[CollectImage] 转发图片尺寸过小，跳过")
-                return
-            
-            result = await self.analyze_image(image_url, event)
-            
-            if result.get("filter_result") != "有效":
-                logger.info(f"[CollectImage] 转发图片无效，跳过: {result.get('reason')}")
-                return
-            
-            char_result = await self.recognize_character(image_url)
-            all_results = char_result.get("all_results", [])
-            ai_detect = char_result.get("ai_detect", "")
-            
-            person_count = len(all_results)
-            confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
-            not_confident_count = person_count - confirmed_count
-            confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
-            
-            character = self._extract_characters(all_results)
-            ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
-            
-            self.db.insert_image(
-                file_hash=file_hash,
-                file_path=image_path,
-                file_name=image_filename,
-                group_id=str(group_id),
-                sender_id=str(sender_id),
-                timestamp=timestamp,
-                tags=result.get("tags"),
-                character=character,
-                description=result.get("description"),
-                ai_detect=ai_detect,
-                confirmed=confirmed,
-            )
-            logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
-            
+            # 先检查哈希（不保存）
+            import tempfile
+            import os as _os
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                    tmp_path = tmp.name
+                    tmp.write(image_data)
+                
+                file_hash = self._calculate_hash(tmp_path)
+                
+                if self.db.is_hash_exists(file_hash):
+                    logger.info("[CollectImage] 转发图片已存在，跳过")
+                    return
+                
+                if not self._check_image_size(tmp_path):
+                    logger.info("[CollectImage] 转发图片尺寸过小，跳过")
+                    return
+                
+                # VLM 分析
+                result = await self.analyze_image(image_url, event)
+                
+                if result.get("filter_result") != "有效":
+                    logger.info(f"[CollectImage] 转发图片无效，跳过: {result.get('reason')}")
+                    return
+                
+                # VLM 有效后再保存图片
+                timestamp = int(time.time())
+                file_ext = ".jpg"
+                image_filename = f"{timestamp}_{group_id}_{sender_id}_{uuid.uuid4().hex[:8]}{file_ext}"
+                image_path = _os.path.join(self.images_dir, image_filename)
+                
+                shutil.copy(tmp_path, image_path)
+                logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
+                
+                # AnimeTrace 识别
+                char_result = await self.recognize_character(image_url)
+                all_results = char_result.get("all_results", [])
+                ai_detect = char_result.get("ai_detect", "")
+                
+                person_count = len(all_results)
+                confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+                not_confident_count = person_count - confirmed_count
+                confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
+                
+                character = self._extract_characters(all_results)
+                ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
+                
+                self.db.insert_image(
+                    file_hash=file_hash,
+                    file_path=image_path,
+                    file_name=image_filename,
+                    group_id=str(group_id),
+                    sender_id=str(sender_id),
+                    timestamp=timestamp,
+                    tags=result.get("tags"),
+                    character=character,
+                    description=result.get("description"),
+                    ai_detect=ai_detect,
+                    confirmed=confirmed,
+                )
+                logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
+            finally:
+                # 清理临时文件
+                if tmp_path and _os.path.exists(tmp_path):
+                    try:
+                        _os.remove(tmp_path)
+                    except:
+                        pass
+                
         except Exception as e:
             logger.error(f"[CollectImage] 处理转发图片失败: {e}")
 
