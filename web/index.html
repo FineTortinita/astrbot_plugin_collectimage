@@ -483,6 +483,25 @@
         </div>
     </div>
 
+    <!-- 自定义确认弹窗 -->
+    <div id="confirm-modal" class="fixed inset-0 hidden">
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" id="confirm-overlay"></div>
+        <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+            <div class="glass-card rounded-2xl shadow-2xl w-full max-w-sm p-6 pointer-events-auto">
+                <h3 id="confirm-title" class="text-lg font-bold text-gray-800 mb-2">确认操作</h3>
+                <p id="confirm-message" class="text-gray-600 mb-6">确定要执行此操作吗？</p>
+                <div class="flex gap-3 justify-end">
+                    <button id="confirm-cancel" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
+                        取消
+                    </button>
+                    <button id="confirm-ok" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition">
+                        确定
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toastify JS -->
     <script src="https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.js"></script>
     <!-- App JS -->

@@ -32,6 +32,34 @@ function showToast(message, type = 'success') {
     }).showToast();
 }
 
+// 自定义确认弹窗
+function showConfirm(title, message) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('confirm-modal');
+        const titleEl = document.getElementById('confirm-title');
+        const messageEl = document.getElementById('confirm-message');
+        const cancelBtn = document.getElementById('confirm-cancel');
+        const okBtn = document.getElementById('confirm-ok');
+        
+        titleEl.textContent = title;
+        messageEl.textContent = message;
+        modal.classList.remove('hidden');
+        
+        const closeModal = (result) => {
+            modal.classList.add('hidden');
+            cancelBtn.removeEventListener('click', handleCancel);
+            okBtn.removeEventListener('click', handleOk);
+            resolve(result);
+        };
+        
+        const handleCancel = () => closeModal(false);
+        const handleOk = () => closeModal(true);
+        
+        cancelBtn.addEventListener('click', handleCancel);
+        okBtn.addEventListener('click', handleOk);
+    });
+}
+
 // 安全添加事件监听器
 function safeAddEvent(selector, event, handler) {
     const el = typeof selector === 'string' ? document.querySelector(selector) : selector;
@@ -328,7 +356,7 @@ function bindEventListeners() {
     const reanalyzeBtn = document.getElementById('reanalyze-btn');
     if (reanalyzeBtn) {
         reanalyzeBtn.addEventListener('click', async () => {
-            if (!confirm('确定要重新分析这张图片吗？')) return;
+            if (!await showConfirm('重新分析', '确定要重新分析这张图片吗？')) return;
             
             reanalyzeBtn.disabled = true;
             reanalyzeBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 inline mr-1 animate-spin"></i>分析中...';
@@ -361,7 +389,7 @@ function bindEventListeners() {
     const recognizeBtn = document.getElementById('recognize-btn');
     if (recognizeBtn) {
         recognizeBtn.addEventListener('click', async () => {
-            if (!confirm('确定要识别这张图片的角色吗？')) return;
+            if (!await showConfirm('识别角色', '确定要识别这张图片的角色吗？')) return;
             
             recognizeBtn.disabled = true;
             recognizeBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 inline mr-1 animate-spin"></i>识别中...';
@@ -394,7 +422,7 @@ function bindEventListeners() {
     const deleteBtn = document.getElementById('delete-btn');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', async () => {
-            if (!confirm('确定要删除这张图片吗？此操作不可恢复！')) return;
+            if (!await showConfirm('删除图片', '确定要删除这张图片吗？此操作不可恢复！')) return;
             
             try {
                 const response = await fetch(`${API_BASE}/api/images/${currentImageId}`, {
@@ -516,7 +544,7 @@ function bindEventListeners() {
     const importAliasBtn = document.getElementById('import-alias-btn');
     if (importAliasBtn) {
         importAliasBtn.addEventListener('click', async () => {
-            if (!confirm('确定要从 aliases.json 导入别名吗？')) return;
+            if (!await showConfirm('导入别名', '确定要从 aliases.json 导入别名吗？')) return;
             
             importAliasBtn.disabled = true;
             importAliasBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 inline mr-1 animate-spin"></i>启动中...';
@@ -552,7 +580,7 @@ function bindEventListeners() {
     const stopImportBtn = document.getElementById('stop-import-btn');
     if (stopImportBtn) {
         stopImportBtn.addEventListener('click', async () => {
-            if (!confirm('确定要停止导入吗？')) return;
+            if (!await showConfirm('停止导入', '确定要停止导入吗？')) return;
             
             try {
                 await fetch(`${API_BASE}/api/aliases/import/stop`, {
@@ -1088,7 +1116,7 @@ function renderAliases(aliases) {
         `;
         
         item.querySelector('.delete-alias-btn').addEventListener('click', async (e) => {
-            if (!confirm('确定要删除这个别名吗？')) return;
+            if (!await showConfirm('删除别名', '确定要删除这个别名吗？')) return;
             
             const aliasId = e.currentTarget.dataset.id;
             try {

@@ -532,10 +532,10 @@ class CollectImagePlugin(Star):
             umo = event.unified_msg_origin
             provider_id = await self.context.get_current_chat_provider_id(umo=umo)
 
-            filter_prompt = """请判断这张图片是否是有效的绘画素材。
+            filter_prompt = getattr(self.config, "filter_prompt", "") or """请判断这张图片是否是有效的绘画素材。
 有效：有人物、角色、场景、物品等具体内容的动漫风格绘画、插画 CG、漫画、游戏立绘等人工绘制的图片。
-无效：照片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。
-请直接回答"有效"或"无效"，无需其他解释。"""
+无效：照片、漫画，写实图片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。
+请直接回答"有效"或"无效"，，无需其他解释。"""
 
             llm_resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
