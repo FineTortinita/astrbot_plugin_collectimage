@@ -26,12 +26,202 @@ class CollectImagePlugin(Star):
         self.db = Database(self.plugin_dir)
         self.tags_library = self._load_tags_library()
         
+        # 图片处理队列 - 串行处理所有图片
+        self._image_queue = asyncio.Queue()
+        self._worker_task = None
+        
         self.web_server = None
         self._init_web_server()
         
-        asyncio.create_task(self._init_aliases_async())
+        # 异步初始化
+        asyncio.create_task(self._init_async())
         
         logger.info(f"[CollectImage] 插件已加载，图片目录: {self.images_dir}")
+
+    async def _init_async(self):
+        """异步初始化 - 启动队列处理器"""
+        # 启动图片处理 worker
+        self._worker_task = asyncio.create_task(self._image_worker())
+        
+        # 初始化别名
+        await self._init_aliases_async()
+    
+    async def _image_worker(self):
+        """图片处理 worker - 串行处理队列中的图片"""
+        logger.info("[CollectImage] 图片处理队列已启动")
+        while True:
+            task = await self._image_queue.get()
+            
+            if task is None:  # 退出信号
+                logger.info("[CollectImage] 图片处理队列已停止")
+                break
+            
+            try:
+                await self._process_image_task(task)
+            except Exception as e:
+                logger.error(f"[CollectImage] 处理图片失败: {e}")
+            finally:
+                self._image_queue.task_done()
+    
+    async def _process_image_task(self, task):
+        """处理队列中的图片"""
+        task_type = task.get('type')
+        
+        if task_type == 'single':
+            # 普通图片处理
+            await self._do_process_single_image(task)
+        elif task_type == 'forward':
+            # 转发消息图片处理
+            await self._do_process_forward_image(task)
+        else:
+            logger.warning(f"[CollectImage] 未知任务类型: {task_type}")
+    
+    async def _do_process_single_image(self, task):
+        """处理普通图片"""
+        msg = task['msg']
+        event = task['event']
+        group_id = task['group_id']
+        sender_id = task['sender_id']
+        img_index = task['img_index']
+        
+        if self._is_sticker(msg, event, img_index):
+            logger.info("[CollectImage] 跳过表情包")
+            return
+        
+        try:
+            local_path = await msg.convert_to_file_path()
+            
+            if not self._check_image_size(local_path):
+                logger.info("[CollectImage] 图片尺寸过小，跳过")
+                return
+            
+            file_hash = self._calculate_hash(local_path)
+            
+            if self.db.is_hash_exists(file_hash):
+                logger.info("[CollectImage] 图片已存在，跳过")
+                return
+            
+            timestamp = int(time.time())
+            ext = os.path.splitext(local_path)[1] or ".jpg"
+            image_filename = f"{timestamp}_{group_id}_{sender_id}{ext}"
+            image_path = os.path.join(self.images_dir, image_filename)
+            shutil.copy(local_path, image_path)
+            logger.info(f"[CollectImage] 图片已保存: {image_path}")
+
+            image_url = msg.url or msg.file
+            if image_url:
+                result = await self.analyze_image(image_url, event)
+                
+                if result.get("filter_result") != "有效":
+                    logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
+                    return
+                
+                char_result = await self.recognize_character(image_url)
+                all_results = char_result.get("all_results", [])
+                ai_detect = char_result.get("ai_detect", "")
+                
+                person_count = len(all_results)
+                confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+                not_confident_count = person_count - confirmed_count
+                confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
+                
+                character = self._extract_characters(all_results)
+                ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
+                
+                self.db.insert_image(
+                    file_hash=file_hash,
+                    file_path=image_path,
+                    file_name=image_filename,
+                    group_id=str(group_id),
+                    sender_id=str(sender_id),
+                    timestamp=timestamp,
+                    tags=result.get("tags"),
+                    character=character,
+                    description=result.get("description"),
+                    ai_detect=ai_detect,
+                    confirmed=confirmed,
+                )
+                logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
+
+        except Exception as e:
+            logger.error(f"[CollectImage] 处理单图失败: {e}")
+
+    async def _do_process_forward_image(self, task):
+        """处理转发消息中的图片"""
+        image_url = task['image_url']
+        event = task['event']
+        group_id = task['group_id']
+        sender_id = task['sender_id']
+        
+        import aiohttp
+        import uuid
+        
+        logger.info(f"[CollectImage] 处理转发图片: {image_url}")
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url) as resp:
+                    if resp.status != 200:
+                        logger.error(f"[CollectImage] 下载图片失败: {resp.status}")
+                        return
+                    
+                    image_data = await resp.read()
+            
+            timestamp = int(time.time())
+            file_ext = ".jpg"
+            image_filename = f"{timestamp}_{group_id}_{sender_id}_{uuid.uuid4().hex[:8]}{file_ext}"
+            image_path = os.path.join(self.images_dir, image_filename)
+            
+            with open(image_path, 'wb') as f:
+                f.write(image_data)
+            
+            logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
+            
+            file_hash = self._calculate_hash(image_path)
+            
+            if self.db.is_hash_exists(file_hash):
+                logger.info("[CollectImage] 转发图片已存在，跳过")
+                return
+            
+            if not self._check_image_size(image_path):
+                logger.info("[CollectImage] 转发图片尺寸过小，跳过")
+                return
+            
+            result = await self.analyze_image(image_url, event)
+            
+            if result.get("filter_result") != "有效":
+                logger.info(f"[CollectImage] 转发图片无效，跳过: {result.get('reason')}")
+                return
+            
+            char_result = await self.recognize_character(image_url)
+            all_results = char_result.get("all_results", [])
+            ai_detect = char_result.get("ai_detect", "")
+            
+            person_count = len(all_results)
+            confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+            not_confident_count = person_count - confirmed_count
+            confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
+            
+            character = self._extract_characters(all_results)
+            ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
+            
+            self.db.insert_image(
+                file_hash=file_hash,
+                file_path=image_path,
+                file_name=image_filename,
+                group_id=str(group_id),
+                sender_id=str(sender_id),
+                timestamp=timestamp,
+                tags=result.get("tags"),
+                character=character,
+                description=result.get("description"),
+                ai_detect=ai_detect,
+                confirmed=confirmed,
+            )
+            logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
+            
+        except Exception as e:
+            logger.error(f"[CollectImage] 处理转发图片失败: {e}")
 
     async def _init_aliases_async(self):
         """异步初始化别名库"""
@@ -295,142 +485,25 @@ class CollectImagePlugin(Star):
             logger.error(f"[CollectImage] 处理转发消息失败: {e}")
 
     async def _process_image_by_url(self, image_url: str, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
-        """通过URL处理图片（用于转发消息中的图片）"""
-        import aiohttp
-        import uuid
-        
-        logger.info(f"[CollectImage] 通过URL处理图片: {image_url}")
-        
-        try:
-            # 下载图片
-            async with aiohttp.ClientSession() as session:
-                async with session.get(image_url) as resp:
-                    if resp.status != 200:
-                        logger.error(f"[CollectImage] 下载图片失败: {resp.status}")
-                        return
-                    
-                    image_data = await resp.read()
-            
-            # 保存图片
-            timestamp = int(time.time())
-            file_ext = ".jpg"
-            image_filename = f"{timestamp}_{group_id}_{sender_id}_{uuid.uuid4().hex[:8]}{file_ext}"
-            image_path = os.path.join(self.images_dir, image_filename)
-            
-            with open(image_path, 'wb') as f:
-                f.write(image_data)
-            
-            logger.info(f"[CollectImage] 图片已保存: {image_path}")
-            
-            # 计算哈希
-            file_hash = self._calculate_hash(image_path)
-            
-            if self.db.is_hash_exists(file_hash):
-                logger.info("[CollectImage] 图片已存在，跳过")
-                return
-            
-            # 检查图片尺寸
-            if not self._check_image_size(image_path):
-                logger.info("[CollectImage] 图片尺寸过小，跳过")
-                return
-            
-            # VLM 分析
-            result = await self.analyze_image(image_url, event)
-            
-            if result.get("filter_result") != "有效":
-                logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
-                return
-            
-            # AnimeTrace 识别
-            char_result = await self.recognize_character(image_url)
-            all_results = char_result.get("all_results", [])
-            ai_detect = char_result.get("ai_detect", "")
-            
-            person_count = len(all_results)
-            character = self._extract_characters(all_results)
-            ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
-            
-            self.db.insert_image(
-                file_hash=file_hash,
-                file_path=image_path,
-                file_name=image_filename,
-                group_id=str(group_id),
-                sender_id=str(sender_id),
-                timestamp=timestamp,
-                tags=result.get("tags"),
-                character=character,
-                description=result.get("description"),
-                ai_detect=ai_detect,
-            )
-            logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect}")
-            
-        except Exception as e:
-            logger.error(f"[CollectImage] 处理URL图片失败: {e}")
+        """将转发消息中的图片加入处理队列"""
+        await self._image_queue.put({
+            'type': 'forward',
+            'image_url': image_url,
+            'event': event,
+            'group_id': group_id,
+            'sender_id': sender_id
+        })
 
     async def _process_single_image(self, msg: Image, event: AstrMessageEvent, group_id: str, sender_id: str, img_index: int = 0) -> None:
-        """处理单张图片的完整流程"""
-        if self._is_sticker(msg, event, img_index):
-            logger.info("[CollectImage] 跳过表情包")
-            return
-        
-        try:
-            local_path = await msg.convert_to_file_path()
-            
-            # 检查图片尺寸
-            if not self._check_image_size(local_path):
-                logger.info("[CollectImage] 图片尺寸过小，跳过")
-                return
-            
-            file_hash = self._calculate_hash(local_path)
-            
-            if self.db.is_hash_exists(file_hash):
-                logger.info("[CollectImage] 图片已存在，跳过")
-                return
-            
-            timestamp = int(time.time())
-            ext = os.path.splitext(local_path)[1] or ".jpg"
-            image_filename = f"{timestamp}_{group_id}_{sender_id}{ext}"
-            image_path = os.path.join(self.images_dir, image_filename)
-            shutil.copy(local_path, image_path)
-            logger.info(f"[CollectImage] 图片已保存: {image_path}")
-
-            image_url = msg.url or msg.file
-            if image_url:
-                # 1. 先 VLM 分析获取 tags
-                result = await self.analyze_image(image_url, event)
-                
-                if result.get("filter_result") != "有效":
-                    logger.info(f"[CollectImage] 图片无效，跳过: {result.get('reason')}")
-                    return
-                
-                # 2. VLM 有效再调用 AnimeTrace 获取角色
-                char_result = await self.recognize_character(image_url)
-                all_results = char_result.get("all_results", [])
-                ai_detect = char_result.get("ai_detect", "")
-                
-                # 3. 根据 AnimeTrace 结果确定人数并提取角色
-                person_count = len(all_results)
-                character = self._extract_characters(all_results)
-                
-                # 4. AI 检测结果只保存布尔值
-                ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
-                
-                self.db.insert_image(
-                    file_hash=file_hash,
-                    file_path=image_path,
-                    file_name=image_filename,
-                    group_id=str(group_id),
-                    sender_id=str(sender_id),
-                    timestamp=timestamp,
-                    tags=result.get("tags"),
-                    character=character,
-                    description=result.get("description"),
-                    ai_detect=ai_detect,
-                )
-                logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 角色={character}, AI检测={ai_detect}")
-
-        except Exception as e:
-            logger.error(f"[CollectImage] 处理图片失败: {e}")
+        """将单张图片加入处理队列"""
+        await self._image_queue.put({
+            'type': 'single',
+            'msg': msg,
+            'event': event,
+            'group_id': group_id,
+            'sender_id': sender_id,
+            'img_index': img_index
+        })
 
     async def analyze_image(self, image_url: str, event: AstrMessageEvent) -> dict:
         try:
@@ -560,11 +633,20 @@ class CollectImagePlugin(Star):
                         return {"character": "未知", "ai_detect": str(result.get("code", "")), "all_results": []}
                     
                     # 获取原始结果
-                    all_results = result.get("data", [])
+                    data = result.get("data", [])
                     ai_detect = str(result.get("ai", ""))
                     
-                    logger.info(f"[CollectImage] 角色识别成功，共 {len(all_results)} 个结果, AI检测: {ai_detect}")
-                    return {"character": "未知", "ai_detect": ai_detect, "all_results": all_results}
+                    # 检查 data 是否为空
+                    if not data:
+                        logger.warning(f"[CollectImage] 角色识别成功但无结果 (data为空)")
+                        return {"character": "未知", "ai_detect": ai_detect, "all_results": []}
+                    
+                    logger.info(f"[CollectImage] 角色识别成功，共 {len(data)} 个结果, AI检测: {ai_detect}")
+                    
+                    # API 调用后等待 3 秒（频率控制）
+                    await asyncio.sleep(3)
+                    
+                    return {"character": "未知", "ai_detect": ai_detect, "all_results": data}
                     
         except Exception as e:
             logger.error(f"[CollectImage] 角色识别异常: {e}")
@@ -582,7 +664,10 @@ class CollectImagePlugin(Star):
             return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
 
     def _extract_characters(self, all_results: list) -> str:
-        """从 AnimeTrace 结果中提取所有角色名和作品，返回 JSON 数组"""
+        """从 AnimeTrace 结果中提取角色名和作品，返回 JSON 数组
+        - not_confident=true: 取前2个
+        - not_confident=false: 取第1个
+        """
         if not all_results:
             return "[]"
         
@@ -590,8 +675,14 @@ class CollectImagePlugin(Star):
         
         for item in all_results:
             char_list = item.get("character", [])
-            if char_list:
-                char_info = char_list[0]
+            if not char_list:
+                continue
+            
+            # 根据 not_confident 决定取几个
+            is_not_confident = item.get("not_confident", False)
+            max_take = 2 if is_not_confident else 1
+            
+            for char_info in char_list[:max_take]:
                 char_name = char_info.get("character", "")
                 char_work = char_info.get("work", "")
                 if char_name:

@@ -182,7 +182,12 @@ function renderImages(images) {
         card.innerHTML = `
             <img src="${API_BASE}/images/${img.file_name}" alt="${img.file_name}" loading="lazy">
             <div class="image-card-info">
-                <div class="character">${characterText}</div>
+                <div class="card-header">
+                    <div class="character">${characterText}</div>
+                    <span class="confirm-badge ${img.confirmed ? 'confirmed' : 'unconfirmed'}" title="${img.confirmed ? '已确认' : '未确认'}">
+                        ${img.confirmed ? '✓' : '⚠'}
+                    </span>
+                </div>
                 <div class="tags">${tagsText || '无标签'}</div>
             </div>
         `;
@@ -218,6 +223,9 @@ async function openDetail(imageId) {
             document.getElementById('detail-sender').textContent = img.sender_id;
             document.getElementById('detail-time').textContent = new Date(img.timestamp * 1000).toLocaleString();
             document.getElementById('detail-description').value = img.description || '';
+            
+            // 保存确认状态
+            window._currentConfirmed = img.confirmed || 0;
             
             // 渲染角色编辑器
             renderCharacterEditor(img.character);
@@ -338,6 +346,50 @@ document.getElementById('save-detail-btn').addEventListener('click', async () =>
         }
     } catch (e) {
         alert('保存失败: ' + e);
+    }
+});
+
+// 确认按钮
+document.getElementById('confirm-btn').addEventListener('click', async () => {
+    try {
+        const response = await fetch(`${API_BASE}/api/images/${currentImageId}/confirm`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmed: true })
+        });
+        const data = await response.json();
+        
+        if (data.success !== false) {
+            window._currentConfirmed = 1;
+            alert('已标记为已确认');
+            loadImages();
+        } else {
+            alert('操作失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('操作失败: ' + e);
+    }
+});
+
+// 取消确认按钮
+document.getElementById('unconfirm-btn').addEventListener('click', async () => {
+    try {
+        const response = await fetch(`${API_BASE}/api/images/${currentImageId}/confirm`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmed: false })
+        });
+        const data = await response.json();
+        
+        if (data.success !== false) {
+            window._currentConfirmed = 0;
+            alert('已标记为未确认');
+            loadImages();
+        } else {
+            alert('操作失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('操作失败: ' + e);
     }
 });
 

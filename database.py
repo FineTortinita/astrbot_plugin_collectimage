@@ -31,11 +31,16 @@ class Database:
                 character TEXT,
                 description TEXT,
                 ai_detect TEXT,
+                confirmed INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         try:
             cursor.execute("ALTER TABLE images ADD COLUMN ai_detect TEXT")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE images ADD COLUMN confirmed INTEGER DEFAULT 0")
         except:
             pass
         
@@ -86,14 +91,15 @@ class Database:
         character: Optional[str] = None,
         description: Optional[str] = None,
         ai_detect: Optional[str] = None,
+        confirmed: int = 0,
     ) -> bool:
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO images 
-                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect, confirmed) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     file_hash,
                     file_path,
@@ -105,6 +111,7 @@ class Database:
                     character,
                     description,
                     ai_detect,
+                    confirmed,
                 ),
             )
             conn.commit()
@@ -204,6 +211,21 @@ class Database:
             cursor.execute(
                 "UPDATE images SET character = ? WHERE id = ?",
                 (character, image_id),
+            )
+            conn.commit()
+            conn.close()
+            return True
+        except Exception:
+            return False
+
+    def update_confirmed(self, image_id: int, confirmed: int) -> bool:
+        """更新确认状态"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE images SET confirmed = ? WHERE id = ?",
+                (confirmed, image_id),
             )
             conn.commit()
             conn.close()

@@ -54,6 +54,7 @@ class WebServer:
         self.app.router.add_delete("/api/images/{image_id}", self.handle_delete_image)
         self.app.router.add_post("/api/images/{image_id}/reanalyze", self.handle_reanalyze)
         self.app.router.add_post("/api/images/{image_id}/recognize_character", self.handle_recognize_character)
+        self.app.router.add_put("/api/images/{image_id}/confirm", self.handle_confirm_image)
 
         self.app.router.add_get("/api/aliases", self.handle_list_aliases)
         self.app.router.add_post("/api/aliases", self.handle_add_alias)
@@ -267,6 +268,25 @@ class WebServer:
         except Exception as e:
             logger.error(f"[CollectImage WebUI] 角色识别失败: {e}")
             return self._err(f"角色识别失败: {e}")
+
+    async def handle_confirm_image(self, request: web.Request) -> web.Response:
+        """更新图片确认状态"""
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+        
+        image_id = int(request.match_info["image_id"])
+        image = self.plugin.db.get_image_by_id(image_id)
+        if not image:
+            return self._err("图片不存在", 404)
+        
+        try:
+            data = await request.json()
+            confirmed = 1 if data.get("confirmed", True) else 0
+            self.plugin.db.update_confirmed(image_id, confirmed)
+            return self._ok({"confirmed": confirmed})
+        except Exception as e:
+            logger.error(f"[CollectImage WebUI] 更新确认状态失败: {e}")
+            return self._err(f"更新确认状态失败: {e}")
 
     async def handle_cleanup(self, request: web.Request) -> web.Response:
         """清理：1)数据库中有记录但文件不存在 2)文件存在但无数据库记录"""

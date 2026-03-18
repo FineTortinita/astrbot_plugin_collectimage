@@ -181,12 +181,41 @@ header h1 {
     padding: 12px;
 }
 
+.image-card-info .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
 .image-card-info .character {
     font-weight: 600;
     margin-bottom: 4px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+}
+
+.confirm-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.confirm-badge.confirmed {
+    background: #52c41a;
+    color: white;
+}
+
+.confirm-badge.unconfirmed {
+    background: #faad14;
+    color: white;
 }
 
 /* 角色编辑器 */
@@ -427,6 +456,24 @@ header h1 {
 
 .btn-info:hover {
     background: #2563eb;
+}
+
+.btn-success {
+    background: #52c41a;
+    color: white;
+}
+
+.btn-success:hover {
+    background: #389e0d;
+}
+
+.btn-secondary {
+    background: #8c8c8c;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #595959;
 }
 
 /* 响应式 */
