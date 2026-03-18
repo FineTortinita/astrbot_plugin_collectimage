@@ -4,174 +4,492 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>图片收集管理器</title>
-    <link rel="stylesheet" href="/web/style.css">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Toastify CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.css">
+    <!-- Heroicons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <style>
+        :root {
+            --gradient-start: #DDD6F3;
+            --gradient-end: #FAACA8;
+            --accent: #9B59B6;
+        }
+        
+        body {
+            background-image: linear-gradient(-20deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+            min-height: 100vh;
+        }
+        
+        .glass-card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+        }
+        
+        .image-card {
+            transition: all 0.3s ease;
+        }
+        
+        .image-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(155, 89, 182, 0.2);
+        }
+        
+        .image-card img {
+            transition: transform 0.3s ease;
+        }
+        
+        .image-card:hover img {
+            transform: scale(1.05);
+        }
+        
+        .confirm-badge {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+        
+        .confirm-badge.confirmed {
+            background: #22C55E;
+            color: white;
+        }
+        
+        .confirm-badge.unconfirmed {
+            background: #F59E0B;
+            color: white;
+        }
+        
+        .sidebar-item {
+            transition: all 0.2s ease;
+        }
+        
+        .sidebar-item:hover {
+            background: rgba(155, 89, 182, 0.1);
+        }
+        
+        .sidebar-item.active {
+            background: rgba(155, 89, 182, 0.2);
+            border-left: 3px solid var(--accent);
+        }
+        
+        .modal-overlay {
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            z-index: 40;
+        }
+        
+        .modal-content {
+            animation: modalSlideIn 0.3s ease;
+            z-index: 50;
+        }
+        
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #9B59B6, #8E44AD);
+            color: white;
+            transition: all 0.2s ease;
+        }
+        
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #8E44AD, #7D3C98);
+            transform: translateY(-1px);
+        }
+        
+        .pagination input {
+            width: 60px;
+            text-align: center;
+        }
+        
+        /* Toast 样式覆盖 */
+        .toastify {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+    </style>
 </head>
-<body>
+<body class="text-gray-700 font-sans">
     <div id="app">
         <!-- 登录页 -->
-        <div id="login-page" class="page">
-            <div class="login-box">
-                <h1>图片收集管理器</h1>
-                <form id="login-form">
-                    <input type="password" id="password" placeholder="请输入密码" required>
-                    <button type="submit">登录</button>
+        <div id="login-page" class="min-h-screen flex items-center justify-center p-4">
+            <div class="glass-card rounded-2xl shadow-xl p-8 w-full max-w-md">
+                <div class="text-center mb-8">
+                    <div class="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-purple-400 to-pink-400 rounded-full flex items-center justify-center">
+                        <i data-lucide="image" class="w-8 h-8 text-white"></i>
+                    </div>
+                    <h1 class="text-2xl font-bold text-gray-800">图片收集管理器</h1>
+                    <p class="text-gray-500 mt-2">AstrBot 插件</p>
+                </div>
+                <form id="login-form" class="space-y-4">
+                    <div>
+                        <input type="password" id="password" 
+                            class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:border-purple-400 focus:ring-2 focus:ring-purple-200 outline-none transition"
+                            placeholder="请输入密码" required>
+                    </div>
+                    <button type="submit" 
+                        class="btn-primary w-full py-3 rounded-xl font-medium shadow-lg">
+                        登 录
+                    </button>
                 </form>
-                <p id="login-error" class="error"></p>
+                <p id="login-error" class="text-red-500 text-center mt-4 hidden"></p>
             </div>
         </div>
 
         <!-- 主页面 -->
-        <div id="main-page" class="page hidden">
-            <header>
-                <h1>图片收集管理器</h1>
-                <div class="header-actions">
-                    <span id="image-count">共 0 张图片</span>
-                    <button id="logout-btn" class="btn-secondary">退出登录</button>
+        <div id="main-page" class="hidden min-h-screen">
+            <!-- Header -->
+            <header class="glass-card shadow-sm sticky top-0 z-40">
+                <div class="max-w-7xl mx-auto px-4 py-4">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-10 h-10 bg-gradient-to-br from-purple-400 to-pink-400 rounded-xl flex items-center justify-center">
+                                <i data-lucide="image" class="w-5 h-5 text-white"></i>
+                            </div>
+                            <h1 class="text-xl font-bold text-gray-800">图片收集管理器</h1>
+                        </div>
+                        <div class="flex items-center space-x-4">
+                            <span id="image-count" class="text-gray-600">共 0 张图片</span>
+                            <button id="logout-btn" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition">
+                                <i data-lucide="log-out" class="w-4 h-4 inline mr-1"></i>退出
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </header>
 
-            <nav class="tab-nav">
-                <button class="tab-btn active" data-tab="images">图片管理</button>
-                <button class="tab-btn" data-tab="aliases">别名管理</button>
-            </nav>
-
-            <div id="tab-images" class="tab-content">
-                <div class="search-bar">
-                    <input type="text" id="search-tag" placeholder="搜索标签...">
-                    <input type="text" id="search-character" placeholder="搜索角色...">
-                    <input type="text" id="search-description" placeholder="搜索描述...">
-                    <button id="search-btn">搜索</button>
-                    <button id="clear-search-btn" class="btn-secondary">清除</button>
+            <div class="max-w-7xl mx-auto px-4 py-6">
+                <!-- 顶部导航 -->
+                <div class="flex gap-2 mb-6">
+                    <button class="tab-btn active px-4 py-2 rounded-lg bg-purple-100 text-purple-700 font-medium" data-tab="images">
+                        <i data-lucide="images" class="w-4 h-4 inline mr-1"></i>图片管理
+                    </button>
+                    <button class="tab-btn px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600" data-tab="aliases">
+                        <i data-lucide="tags" class="w-4 h-4 inline mr-1"></i>别名管理
+                    </button>
                 </div>
 
-                <div id="image-grid" class="image-grid"></div>
-                
-                <div class="pagination">
-                    <button id="prev-page" class="btn-secondary">上一页</button>
-                    <span id="page-info">第 1 页</span>
-                    <button id="next-page" class="btn-secondary">下一页</button>
-                </div>
-            </div>
+                <div class="flex gap-6">
+                    <!-- 侧边栏 (仅图片管理时显示) -->
+                    <aside id="sidebar" class="w-48 flex-shrink-0">
+                        <div class="glass-card rounded-xl p-4 space-y-2 sticky top-24">
+                            <button class="sidebar-item active w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="all">
+                                <i data-lucide="images" class="w-5 h-5 text-purple-500"></i>
+                                <span>全部图片</span>
+                            </button>
+                            <button class="sidebar-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="confirmed">
+                                <i data-lucide="check-circle" class="w-5 h-5 text-green-500"></i>
+                                <span>已确认</span>
+                            </button>
+                            <button class="sidebar-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="unconfirmed">
+                                <i data-lucide="alert-circle" class="w-5 h-5 text-amber-500"></i>
+                                <span>未确认</span>
+                            </button>
+                            <button class="sidebar-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="stats">
+                                <i data-lucide="bar-chart-3" class="w-5 h-5 text-blue-500"></i>
+                                <span>统计</span>
+                            </button>
+                        </div>
+                    </aside>
 
-            <div id="tab-aliases" class="tab-content hidden">
-                <div class="alias-toolbar">
-                    <input type="text" id="search-alias" placeholder="搜索别名...">
-                    <select id="alias-type-filter">
-                        <option value="">全部类型</option>
-                        <option value="character">角色</option>
-                        <option value="work">作品</option>
-                    </select>
-                    <select id="alias-page-size">
-                        <option value="25">25条/页</option>
-                        <option value="50">50条/页</option>
-                        <option value="100">100条/页</option>
-                    </select>
-                    <button id="search-alias-btn" class="btn-primary">搜索</button>
-                    <button id="import-alias-btn" class="btn-warning">从文件导入</button>
-                    <button id="add-alias-btn" class="btn-primary">添加别名</button>
-                </div>
-                <div id="import-progress" class="import-progress hidden">
-                    <div class="progress-bar">
-                        <div id="progress-fill" class="progress-fill"></div>
-                    </div>
-                    <div class="progress-info">
-                        <span id="progress-text">导入中...</span>
-                        <button id="stop-import-btn" class="btn-danger btn-sm">停止</button>
-                    </div>
-                </div>
-                <div id="alias-list" class="alias-list"></div>
-                <div class="alias-pagination">
-                    <button id="alias-prev-page" class="btn-secondary">上一页</button>
-                    <span id="alias-page-info">第 1 页</span>
-                    <button id="alias-next-page" class="btn-secondary">下一页</button>
+                    <!-- 主内容 -->
+                    <main class="flex-1">
+                        <!-- 图片管理内容 -->
+                        <div id="tab-images" class="tab-content">
+                            <!-- 搜索栏 -->
+                            <div class="glass-card rounded-xl p-4 mb-6">
+                                <div class="flex flex-wrap gap-3">
+                                    <input type="text" id="search-tag" placeholder="搜索标签..." 
+                                        class="flex-1 min-w-32 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition">
+                                    <input type="text" id="search-character" placeholder="搜索角色..." 
+                                        class="flex-1 min-w-32 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition">
+                                    <input type="text" id="search-description" placeholder="搜索描述..." 
+                                        class="flex-1 min-w-32 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition">
+                                    <button id="search-btn" class="btn-primary px-6 py-2 rounded-lg font-medium">
+                                        <i data-lucide="search" class="w-4 h-4 inline mr-1"></i>搜索
+                                    </button>
+                                    <button id="clear-search-btn" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
+                                        清除
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 图片列表 -->
+                            <div id="image-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
+                            
+                            <!-- 翻页 -->
+                            <div class="mt-6 flex items-center justify-center gap-2">
+                                <button id="first-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="首页">
+                                    <i data-lucide="chevrons-left" class="w-5 h-5"></i>
+                                </button>
+                                <button id="prev-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="上一页">
+                                    <i data-lucide="chevron-left" class="w-5 h-5"></i>
+                                </button>
+                                <div class="flex items-center gap-2 px-4">
+                                    <span class="text-gray-600">第</span>
+                                    <input type="number" id="page-input" min="1" 
+                                        class="w-16 px-2 py-1 text-center rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                    <span class="text-gray-600">/ <span id="total-pages">1</span> 页</span>
+                                    <button id="go-page" class="px-3 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition">
+                                        跳转
+                                    </button>
+                                </div>
+                                <button id="next-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="下一页">
+                                    <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                                </button>
+                                <button id="last-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="尾页">
+                                    <i data-lucide="chevrons-right" class="w-5 h-5"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 别名管理 -->
+                        <div id="tab-aliases" class="tab-content hidden">
+                            <div class="glass-card rounded-xl p-4 mb-4">
+                                <div class="flex flex-wrap gap-3 items-center">
+                                    <input type="text" id="search-alias" placeholder="搜索别名..." 
+                                        class="flex-1 min-w-40 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                    <select id="alias-type-filter" class="px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                        <option value="">全部类型</option>
+                                        <option value="character">角色</option>
+                                        <option value="work">作品</option>
+                                    </select>
+                                    <select id="alias-page-size" class="px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                        <option value="25">25条/页</option>
+                                        <option value="50">50条/页</option>
+                                        <option value="100">100条/页</option>
+                                    </select>
+                                    <button id="search-alias-btn" class="btn-primary px-4 py-2 rounded-lg">
+                                        <i data-lucide="search" class="w-4 h-4 inline mr-1"></i>搜索
+                                    </button>
+                                    <button id="import-alias-btn" class="px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200">
+                                        <i data-lucide="upload" class="w-4 h-4 inline mr-1"></i>导入
+                                    </button>
+                                    <button id="add-alias-btn" class="btn-primary px-4 py-2 rounded-lg">
+                                        <i data-lucide="plus" class="w-4 h-4 inline mr-1"></i>添加
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="import-progress" class="hidden glass-card rounded-xl p-4 mb-4">
+                                <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
+                                    <div id="progress-fill" class="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                                <div class="flex justify-between items-center mt-2">
+                                    <span id="progress-text" class="text-sm text-gray-600">导入中...</span>
+                                    <button id="stop-import-btn" class="px-3 py-1 bg-red-100 text-red-600 rounded-lg text-sm">停止</button>
+                                </div>
+                            </div>
+                            <div id="alias-list" class="space-y-2"></div>
+                            <div class="mt-4 flex justify-center">
+                                <div class="flex items-center gap-2">
+                                    <button id="alias-prev-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50">
+                                        <i data-lucide="chevron-left" class="w-5 h-5"></i>
+                                    </button>
+                                    <span id="alias-page-info" class="px-4 text-gray-600">第 1 页</span>
+                                    <button id="alias-next-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50">
+                                        <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 统计 -->
+                        <div id="tab-stats" class="tab-content hidden">
+                            <div class="glass-card rounded-xl p-6">
+                                <div class="flex items-center justify-between mb-6">
+                                    <h2 class="text-xl font-bold text-gray-800">图片统计</h2>
+                                    <select id="stats-days" class="px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                        <option value="7">最近 7 天</option>
+                                        <option value="15">最近 15 天</option>
+                                        <option value="30">最近 30 天</option>
+                                    </select>
+                                </div>
+                                
+                                <!-- 统计卡片 -->
+                                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                    <div class="bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl p-4 text-white">
+                                        <div class="text-sm opacity-80 mb-1">总图片数</div>
+                                        <div id="stats-total" class="text-3xl font-bold">0</div>
+                                    </div>
+                                    <div class="bg-gradient-to-br from-green-500 to-teal-500 rounded-xl p-4 text-white">
+                                        <div class="text-sm opacity-80 mb-1">已确认</div>
+                                        <div id="stats-confirmed" class="text-3xl font-bold">0</div>
+                                    </div>
+                                    <div class="bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl p-4 text-white">
+                                        <div class="text-sm opacity-80 mb-1">未确认</div>
+                                        <div id="stats-unconfirmed" class="text-3xl font-bold">0</div>
+                                    </div>
+                                    <div class="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-4 text-white">
+                                        <div class="text-sm opacity-80 mb-1">今日新增</div>
+                                        <div id="stats-today" class="text-3xl font-bold">0</div>
+                                    </div>
+                                </div>
+
+                                <!-- 图表 -->
+                                <div class="bg-white/50 rounded-xl p-4">
+                                    <h3 class="text-lg font-semibold text-gray-700 mb-4">每日新增图片趋势</h3>
+                                    <div class="h-64 overflow-x-auto">
+                                        <canvas id="stats-chart" class="min-w-full"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </main>
                 </div>
             </div>
         </div>
 
         <!-- 图片详情弹窗 -->
-        <div id="detail-modal" class="modal hidden">
-            <div class="modal-content">
-                <span class="close">&times;</span>
-                <div class="modal-body">
-                    <div class="modal-image">
-                        <img id="detail-image" src="" alt="">
+        <div id="detail-modal" class="fixed inset-0 hidden">
+            <div class="modal-overlay absolute inset-0 cursor-pointer" id="detail-modal-overlay" onclick="handleDetailOverlayClick()"></div>
+            <div class="modal-content relative flex items-center justify-center min-h-screen p-4 pointer-events-none">
+                <div class="glass-card rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden pointer-events-auto">
+                    <div class="flex justify-between items-center p-4 border-b border-gray-100">
+                        <h2 class="text-xl font-bold text-gray-800">图片详情</h2>
+                        <button class="close p-2 hover:bg-gray-100 rounded-lg transition">
+                            <i data-lucide="x" class="w-5 h-5"></i>
+                        </button>
                     </div>
-                    <div class="modal-info">
-                        <h2>图片详情</h2>
-                        <div class="info-item">
-                            <label>文件名:</label>
-                            <span id="detail-filename"></span>
-                        </div>
-                        <div class="info-item">
-                            <label>群号:</label>
-                            <span id="detail-group"></span>
-                        </div>
-                        <div class="info-item">
-                            <label>发送者:</label>
-                            <span id="detail-sender"></span>
-                        </div>
-                        <div class="info-item">
-                            <label>时间:</label>
-                            <span id="detail-time"></span>
-                        </div>
-                        <div class="info-item">
-                            <label>角色:</label>
-                            <div id="character-editor" class="character-editor">
-                                <div class="character-list"></div>
-                                <button type="button" id="add-character-btn" class="btn-small">+ 添加角色</button>
+                    <div class="p-4 overflow-y-auto max-h-[calc(90vh-140px)]">
+                        <div class="flex gap-6">
+                            <!-- 图片预览 -->
+                            <div class="w-1/2">
+                                <div class="aspect-square rounded-xl overflow-hidden bg-gray-100">
+                                    <img id="detail-image" src="" alt="" class="w-full h-full object-contain">
+                                </div>
+                                <div class="mt-4 space-y-2 text-sm text-gray-600">
+                                    <div class="flex justify-between">
+                                        <span>文件名:</span>
+                                        <span id="detail-filename" class="text-gray-800 font-medium"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>群号:</span>
+                                        <span id="detail-group" class="text-gray-800"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>发送者:</span>
+                                        <span id="detail-sender" class="text-gray-800"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>时间:</span>
+                                        <span id="detail-time" class="text-gray-800"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 信息编辑 -->
+                            <div class="w-1/2 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">角色</label>
+                                    <div id="character-editor" class="space-y-2">
+                                        <div class="character-list space-y-2"></div>
+                                        <button type="button" id="add-character-btn" class="text-purple-600 hover:text-purple-700 text-sm flex items-center">
+                                            <i data-lucide="plus" class="w-4 h-4 mr-1"></i>添加角色
+                                        </button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">描述</label>
+                                    <input type="text" id="detail-description" 
+                                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none"
+                                        placeholder="图片描述">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">标签</label>
+                                    <div id="detail-tags" class="flex flex-wrap gap-2"></div>
+                                </div>
                             </div>
                         </div>
-                        <div class="info-item">
-                            <label>描述:</label>
-                            <input type="text" id="detail-description" placeholder="图片描述">
-                        </div>
-                        <div class="info-item">
-                            <label>标签:</label>
-                            <div id="detail-tags" class="tags-container"></div>
-                        </div>
-                        <div class="modal-actions">
-                            <button id="save-detail-btn" class="btn-primary">保存</button>
-                            <button id="confirm-btn" class="btn-success">确认</button>
-                            <button id="unconfirm-btn" class="btn-secondary">取消确认</button>
-                            <button id="reanalyze-btn" class="btn-warning">AI重新分析</button>
-                            <button id="recognize-btn" class="btn-info">识别角色</button>
-                            <button id="delete-btn" class="btn-danger">删除</button>
-                        </div>
+                    </div>
+                    <div class="p-4 border-t border-gray-100 flex flex-wrap gap-2 justify-end">
+                        <button id="save-detail-btn" class="btn-primary px-4 py-2 rounded-lg">
+                            <i data-lucide="save" class="w-4 h-4 inline mr-1"></i>保存
+                        </button>
+                        <button id="confirm-btn" class="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200">
+                            <i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i>确认
+                        </button>
+                        <button id="unconfirm-btn" class="px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200">
+                            <i data-lucide="alert-circle" class="w-4 h-4 inline mr-1"></i>取消确认
+                        </button>
+                        <button id="reanalyze-btn" class="px-4 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200">
+                            <i data-lucide="refresh-cw" class="w-4 h-4 inline mr-1"></i>重新分析
+                        </button>
+                        <button id="recognize-btn" class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">
+                            <i data-lucide="user-check" class="w-4 h-4 inline mr-1"></i>识别角色
+                        </button>
+                        <button id="delete-btn" class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200">
+                            <i data-lucide="trash-2" class="w-4 h-4 inline mr-1"></i>删除
+                        </button>
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- 添加别名弹窗 -->
-        <div id="alias-modal" class="modal hidden">
-            <div class="modal-content modal-small">
-                <span class="close-alias">&times;</span>
-                <h2>添加别名</h2>
-                <form id="add-alias-form">
-                    <div class="form-group">
-                        <label>类型:</label>
-                        <select id="alias-type">
-                            <option value="character">角色</option>
-                            <option value="work">作品</option>
-                        </select>
+        <div id="alias-modal" class="fixed inset-0 z-50 hidden">
+            <div class="modal-overlay absolute inset-0" onclick="document.getElementById('alias-modal').classList.add('hidden')"></div>
+            <div class="modal-content relative z-10 flex items-center justify-center min-h-screen p-4">
+                <div class="glass-card rounded-2xl shadow-2xl w-full max-w-md">
+                    <div class="flex justify-between items-center p-4 border-b border-gray-100">
+                        <h2 class="text-xl font-bold text-gray-800">添加别名</h2>
+                        <button onclick="document.getElementById('alias-modal').classList.add('hidden')" class="p-2 hover:bg-gray-100 rounded-lg transition">
+                            <i data-lucide="x" class="w-5 h-5"></i>
+                        </button>
                     </div>
-                    <div class="form-group">
-                        <label>原名(日文/英文):</label>
-                        <input type="text" id="alias-original" placeholder="例如: 鳴瀬白羽" required>
-                    </div>
-                    <div class="form-group">
-                        <label>别名(中文/简体):</label>
-                        <input type="text" id="alias-name" placeholder="例如: 鸣濑白羽" required>
-                    </div>
-                    <div class="modal-actions">
-                        <button type="submit" class="btn-primary">添加</button>
-                        <button type="button" id="cancel-alias-btn" class="btn-secondary">取消</button>
-                    </div>
-                </form>
+                    <form id="add-alias-form" class="p-4 space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">类型</label>
+                            <select id="alias-type" class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                <option value="character">角色</option>
+                                <option value="work">作品</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">原名(日文/英文)</label>
+                            <input type="text" id="alias-original" placeholder="例如: 鳴瀬白羽" required
+                                class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">别名(中文/简体)</label>
+                            <input type="text" id="alias-name" placeholder="例如: 鸣濑白羽" required
+                                class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none">
+                        </div>
+                        <div class="flex gap-3 pt-2">
+                            <button type="submit" class="btn-primary flex-1 py-2 rounded-lg font-medium">
+                                <i data-lucide="plus" class="w-4 h-4 inline mr-1"></i>添加
+                            </button>
+                            <button type="button" id="cancel-alias-btn" class="flex-1 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200">
+                                取消
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
 
+    <!-- Toastify JS -->
+    <script src="https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.js"></script>
+    <!-- App JS -->
     <script src="/web/app.js"></script>
+    <script>
+        // 初始化图标
+        lucide.createIcons();
+    </script>
 </body>
 </html>

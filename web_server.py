@@ -21,7 +21,7 @@ class WebServer:
         self.port = port
         self.app = web.Application(
             client_max_size=self.CLIENT_MAX_SIZE,
-            middlewares=[self._error_middleware, self._auth_middleware],
+            middlewares=[self._cors_middleware, self._error_middleware, self._auth_middleware],
         )
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
@@ -98,6 +98,14 @@ class WebServer:
         return True
 
     @web.middleware
+    async def _cors_middleware(self, request: web.Request, handler):
+        response = await handler(request)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+
+    @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
         if request.path.startswith("/api/auth/"):
             return await handler(request)
@@ -157,18 +165,24 @@ class WebServer:
         character = request.query.get("character")
         description = request.query.get("description")
         group_id = request.query.get("group_id")
+        confirmed = request.query.get("confirmed")
         limit = int(request.query.get("limit", 50))
         offset = int(request.query.get("offset", 0))
+        
+        confirmed_val = None
+        if confirmed is not None:
+            confirmed_val = int(confirmed)
 
         images = self.plugin.db.search_images(
             tag=tag,
             character=character,
             description=description,
             group_id=group_id,
+            confirmed=confirmed_val,
             limit=limit,
             offset=offset,
         )
-        total = self.plugin.db.count_images()
+        total = self.plugin.db.count_images(confirmed=confirmed_val)
         
         for img in images:
             if img.get("tags"):
@@ -320,8 +334,14 @@ class WebServer:
             return self._err(str(e))
 
     async def handle_get_stats(self, request: web.Request) -> web.Response:
-        total = self.plugin.db.count_images()
-        return self._ok({"total": total})
+        try:
+            days = int(request.query.get("days", 7))
+            if days not in [7, 15, 30]:
+                days = 7
+            stats = self.plugin.db.get_stats(days)
+            return self._ok(stats)
+        except Exception as e:
+            return self._err(str(e))
 
     async def handle_health_check(self, request: web.Request) -> web.Response:
         return self._ok({"status": "ok"})

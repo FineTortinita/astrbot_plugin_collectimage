@@ -1,7 +1,7 @@
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 
@@ -300,6 +300,7 @@ class Database:
         character: str = None,
         description: str = None,
         group_id: str = None,
+        confirmed: int = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list:
@@ -319,6 +320,9 @@ class Database:
         if group_id:
             conditions.append("group_id = ?")
             params.append(group_id)
+        if confirmed is not None:
+            conditions.append("confirmed = ?")
+            params.append(confirmed)
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         params.extend([limit, offset])
         cursor.execute(
@@ -329,13 +333,62 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
-    def count_images(self) -> int:
+    def count_images(self, confirmed: int = None) -> int:
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM images")
+        if confirmed is not None:
+            cursor.execute("SELECT COUNT(*) FROM images WHERE confirmed = ?", (confirmed,))
+        else:
+            cursor.execute("SELECT COUNT(*) FROM images")
         count = cursor.fetchone()[0]
         conn.close()
         return count
+
+    def get_stats(self, days: int = 7) -> dict:
+        """获取统计信息"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # 总数
+        cursor.execute("SELECT COUNT(*) FROM images")
+        total = cursor.fetchone()[0]
+        
+        # 已确认
+        cursor.execute("SELECT COUNT(*) FROM images WHERE confirmed = 1")
+        confirmed = cursor.fetchone()[0]
+        
+        # 未确认
+        cursor.execute("SELECT COUNT(*) FROM images WHERE confirmed = 0")
+        unconfirmed = cursor.fetchone()[0]
+        
+        # 今日新增
+        today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        cursor.execute("SELECT COUNT(*) FROM images WHERE timestamp >= ?", (today_start,))
+        today_new = cursor.fetchone()[0]
+        
+        # 每日新增趋势
+        daily_data = []
+        for i in range(days - 1, -1, -1):
+            date = datetime.now() - timedelta(days=i)
+            day_start = int(date.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+            day_end = int(date.replace(hour=23, minute=59, second=59, microsecond=999999).timestamp())
+            cursor.execute("SELECT COUNT(*) FROM images WHERE timestamp >= ? AND timestamp <= ?", (day_start, day_end))
+            count = cursor.fetchone()[0]
+            daily_data.append({
+                "date": date.strftime("%Y-%m-%d"),
+                "label": date.strftime("%m/%d"),
+                "count": count
+            })
+        
+        conn.close()
+        
+        return {
+            "total": total,
+            "confirmed": confirmed,
+            "unconfirmed": unconfirmed,
+            "today_new": today_new,
+            "daily": daily_data
+        }
 
     def search_character_random(self, keyword: str, limit: int = 1) -> list:
         """模糊搜索角色(含作品)并随机选取"""
