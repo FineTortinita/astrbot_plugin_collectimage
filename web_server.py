@@ -49,6 +49,7 @@ class WebServer:
         self.app.router.add_post("/api/auth/logout", self.handle_logout)
 
         self.app.router.add_get("/api/images", self.handle_list_images)
+        self.app.router.add_get("/api/images/search", self.handle_search_images)
         self.app.router.add_get("/api/images/{image_id}", self.handle_get_image)
         self.app.router.add_put("/api/images/{image_id}", self.handle_update_image)
         self.app.router.add_delete("/api/images/{image_id}", self.handle_delete_image)
@@ -191,6 +192,42 @@ class WebServer:
                 except:
                     pass
         return self._ok({"images": images, "total": total})
+
+    async def handle_search_images(self, request: web.Request) -> web.Response:
+        """搜索图片（支持别名匹配，与 /moe 命令相同的搜索逻辑）"""
+        keyword = request.query.get("keyword", "")
+        limit = int(request.query.get("limit", 50))
+        confirmed = request.query.get("confirmed")
+        
+        if not keyword:
+            return self._err("关键词不能为空")
+        
+        if limit > 100:
+            limit = 100
+        
+        confirmed_val = None
+        if confirmed is not None:
+            confirmed_val = int(confirmed)
+        
+        # 优先搜索角色（含别名匹配）
+        images = self.plugin.db.search_character_random_with_alias(keyword=keyword, limit=limit)
+        
+        # 角色没找到再搜索标签和描述（含别名匹配）
+        if not images:
+            images = self.plugin.db.search_all_random_with_alias(keyword=keyword, limit=limit)
+        
+        # 如果有确认状态筛选，在结果中过滤
+        if confirmed_val is not None:
+            images = [img for img in images if img.get("confirmed") == confirmed_val]
+        
+        for img in images:
+            if img.get("tags"):
+                try:
+                    img["tags"] = json.loads(img["tags"])
+                except:
+                    pass
+        
+        return self._ok({"images": images, "total": len(images), "keyword": keyword})
 
     async def handle_get_image(self, request: web.Request) -> web.Response:
         image_id = int(request.match_info["image_id"])

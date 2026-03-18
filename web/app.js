@@ -5,13 +5,9 @@ let pageSize = 20;
 let totalImages = 0;
 let currentImageId = null;
 let currentFilter = 'all';
+let isSearchMode = false;
 let detailModal = null;
 let loginPage, mainPage, loginForm, loginError, imageGrid, imageCount;
-let searchParams = {
-    tag: '',
-    character: '',
-    description: ''
-};
 
 // Toast 通知函数
 function showToast(message, type = 'success') {
@@ -138,11 +134,13 @@ function bindEventListeners() {
     const searchBtn = document.getElementById('search-btn');
     if (searchBtn) {
         searchBtn.addEventListener('click', () => {
-            searchParams.tag = document.getElementById('search-tag')?.value || '';
-            searchParams.character = document.getElementById('search-character')?.value || '';
-            searchParams.description = document.getElementById('search-description')?.value || '';
-            currentPage = 0;
-            loadImages();
+            const keyword = document.getElementById('search-keyword')?.value || '';
+            if (keyword) {
+                searchImagesWithAlias(keyword);
+            } else {
+                currentPage = 0;
+                loadImages();
+            }
         });
     }
 
@@ -150,15 +148,27 @@ function bindEventListeners() {
     const clearSearchBtn = document.getElementById('clear-search-btn');
     if (clearSearchBtn) {
         clearSearchBtn.addEventListener('click', () => {
-            const tagInput = document.getElementById('search-tag');
-            const charInput = document.getElementById('search-character');
-            const descInput = document.getElementById('search-description');
-            if (tagInput) tagInput.value = '';
-            if (charInput) charInput.value = '';
-            if (descInput) descInput.value = '';
-            searchParams = { tag: '', character: '', description: '' };
+            const keywordInput = document.getElementById('search-keyword');
+            if (keywordInput) keywordInput.value = '';
             currentPage = 0;
+            isSearchMode = false;
             loadImages();
+        });
+    }
+
+    // 搜索框回车搜索
+    const keywordInput = document.getElementById('search-keyword');
+    if (keywordInput) {
+        keywordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const keyword = keywordInput.value || '';
+                if (keyword) {
+                    searchImagesWithAlias(keyword);
+                } else {
+                    currentPage = 0;
+                    loadImages();
+                }
+            }
         });
     }
 
@@ -169,6 +179,7 @@ function bindEventListeners() {
             item.classList.add('active');
             
             currentFilter = item.dataset.filter;
+            isSearchMode = false; // 退出搜索模式
             
             // 隐藏所有 tab 内容
             document.querySelectorAll('.tab-content').forEach(content => {
@@ -710,9 +721,6 @@ async function loadImages() {
         params.append('confirmed', '0');
     }
     
-    if (searchParams.tag) params.append('tag', searchParams.tag);
-    if (searchParams.character) params.append('character', searchParams.character);
-    if (searchParams.description) params.append('description', searchParams.description);
     params.append('limit', pageSize);
     params.append('offset', currentPage * pageSize);
 
@@ -727,6 +735,37 @@ async function loadImages() {
         }
     } catch (e) {
         console.error('加载图片失败:', e);
+    }
+}
+
+// 搜索图片（支持别名匹配）
+async function searchImagesWithAlias(keyword) {
+    const params = new URLSearchParams();
+    params.append('keyword', keyword);
+    params.append('limit', 50);
+    
+    // 侧边栏筛选
+    if (currentFilter === 'confirmed') {
+        params.append('confirmed', '1');
+    } else if (currentFilter === 'unconfirmed') {
+        params.append('confirmed', '0');
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/images/search?${params}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            isSearchMode = true;
+            totalImages = data.total;
+            currentPage = 0;
+            renderImages(data.images);
+            updatePagination();
+            showToast(`找到 ${data.total} 张相关图片`, 'info');
+        }
+    } catch (e) {
+        console.error('搜索图片失败:', e);
+        showToast('搜索失败', 'error');
     }
 }
 
