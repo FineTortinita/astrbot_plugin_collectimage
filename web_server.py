@@ -1,14 +1,49 @@
 import asyncio
 import hashlib
+import io
 import os
 import secrets
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
 from aiohttp import web
+from PIL import Image
 
 from astrbot.api import logger
+
+
+# 缩略图配置
+THUMBNAIL_SIZE = (300, 300)
+THUMBNAIL_CACHE_DIR = None
+
+
+def _get_thumbnail_cache_dir() -> Path:
+    """获取缩略图缓存目录"""
+    global THUMBNAIL_CACHE_DIR
+    if THUMBNAIL_CACHE_DIR is None:
+        THUMBNAIL_CACHE_DIR = Path(__file__).parent / "web" / "cache" / "thumbs"
+        THUMBNAIL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return THUMBNAIL_CACHE_DIR
+
+
+@lru_cache(maxsize=500)
+def _generate_thumbnail_cached(image_path: str) -> bytes:
+    """生成缩略图（带缓存）"""
+    try:
+        with Image.open(image_path) as img:
+            img.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+            
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            
+            buffer = io.BytesIO()
+            img.save(buffer, format='JPEG', quality=85, optimize=True)
+            return buffer.getvalue()
+    except Exception as e:
+        logger.error(f"[CollectImage] 生成缩略图失败: {image_path}, {e}")
+        return b""
 
 
 class WebServer:
@@ -403,11 +438,28 @@ class WebServer:
         try:
             path = request.match_info["path"]
             file_path = Path(self.images_dir) / path
+            
+            if not file_path.exists() or not file_path.is_file():
+                logger.warning(f"[CollectImage] 图片不存在: {file_path}")
+                return web.Response(text="Not found", status=404)
+            
+            size = request.query.get("size", "original")
+            
+            if size == "thumb":
+                logger.info(f"[CollectImage] 请求缩略图: {file_path}")
+                thumbnail_data = _generate_thumbnail_cached(str(file_path))
+                
+                if thumbnail_data:
+                    return web.Response(
+                        body=thumbnail_data,
+                        content_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"}
+                    )
+                else:
+                    return web.Response(text="Failed to generate thumbnail", status=500)
+            
             logger.info(f"[CollectImage] 请求图片: {file_path}")
-            if file_path.exists() and file_path.is_file():
-                return web.FileResponse(file_path)
-            logger.warning(f"[CollectImage] 图片不存在: {file_path}")
-            return web.Response(text="Not found", status=404)
+            return web.FileResponse(file_path)
         except Exception as e:
             logger.error(f"[CollectImage] 加载图片失败: {e}")
             return web.Response(text=str(e), status=500)

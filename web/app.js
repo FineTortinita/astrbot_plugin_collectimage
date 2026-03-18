@@ -810,12 +810,12 @@ function renderImages(images) {
         
         card.innerHTML = `
             <div class="aspect-square overflow-hidden bg-gray-100">
-                <img src="${API_BASE}/images/${img.file_name}" alt="${img.file_name}" loading="lazy" class="w-full h-full object-cover">
+                <img src="${API_BASE}/images/${img.file_name}?size=thumb" alt="${img.file_name}" loading="lazy" class="w-full h-full object-cover">
             </div>
             <div class="p-3">
                 <div class="flex items-center justify-between gap-2 mb-1">
                     <div class="font-medium text-sm text-gray-800 truncate flex-1">${characterText}</div>
-                    <span class="confirm-badge ${img.confirmed ? 'confirmed' : 'unconfirmed'}" title="${img.confirmed ? '已确认' : '未确认'}">
+                    <span class="confirm-badge ${img.confirmed ? 'confirmed' : 'unconfirmed'}" title="${img.confirmed ? '已确认' : '已确认'}">
                         ${img.confirmed ? '✓' : '⚠'}
                     </span>
                 </div>
