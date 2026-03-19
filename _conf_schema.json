@@ -1,27 +1,62 @@
 {
   "allowed_groups": {
-    "description": "允许收集图片的群号列表，白名单模式",
+    "description": "允许收集图片的群号列表，白名单模式。仅处理此列表中的群消息；若为空，插件不处理任何群组。",
     "type": "list",
     "default": [""]
   },
   "webui_enabled": {
-    "description": "是否启用 WebUI 管理界面",
+    "description": "是否启用 WebUI 管理界面。启用后可通过浏览器访问管理界面，支持图片浏览、编辑、搜索、别名管理等功能。",
     "type": "bool",
     "default": false
   },
   "webui_port": {
-    "description": "WebUI 监听端口",
+    "description": "WebUI 监听端口。访问地址为 http://你的IP:端口号/。建议使用 8000-9999 范围内的端口，避免与系统服务冲突。",
     "type": "int",
     "default": 9192
   },
   "webui_password": {
-    "description": "WebUI 访问密码",
+    "description": "WebUI 访问密码。首次使用后请立即修改默认密码。建议使用字母+数字+特殊字符的组合，长度 8 位以上。",
     "type": "string",
     "default": "admin123"
   },
   "filter_prompt": {
-    "description": "AI 图片筛选提示词，决定哪些图片被认为是有效的绘画素材",
+    "description": "AI 图片筛选提示词，决定哪些图片被认为是有效的绘画素材。修改此配置可调整图片筛选的严格程度。建议保留默认值，除非你有特殊需求。",
     "type": "string",
     "default": "请判断这张图片是否是有效的绘画素材。\n有效：有人物、角色、场景、物品等具体内容的动漫风格绘画、插画 CG、漫画、游戏立绘等人工绘制的图片。\n无效：照片、漫画、写实图片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。\n请直接回答\"有效\"或\"无效\"，无需其他解释。"
+  },
+  "anime_trace_delay": {
+    "description": "AnimeTrace API 调用间隔（秒）。用于频率控制，避免被 API 限流。推荐值：3-5秒。降低可能导致 429 错误，提高会降低识别速度。",
+    "type": "int",
+    "default": 3
+  },
+  "max_file_size_mb": {
+    "description": "触发图片压缩的文件大小阈值（MB）。超过此大小的图片会被等比例压缩后再发送到 AnimeTrace API，避免 413 错误。推荐值：2MB。如果经常遇到 413 错误可降低此值。",
+    "type": "int",
+    "default": 2
+  },
+  "max_image_dimension": {
+    "description": "图片压缩后的最大边长（像素）。等比例缩放，保持原始比例不变形。推荐值：1500-2500px。过小可能导致识别精度下降，过大会增加 API 响应时间。",
+    "type": "int",
+    "default": 2000
+  },
+  "jpeg_quality": {
+    "description": "图片压缩时的 JPEG 质量（1-100）。数值越高质量越好但文件越大。推荐值：80-90。低于 70 可能影响识别精度，高于 95 文件过大。",
+    "type": "int",
+    "default": 85
+  },
+  "thumbnail_size": {
+    "description": "WebUI 缩略图最大边长（像素）。缩略图用于图片列表展示，减少加载时间和带宽消耗。推荐值：200-400px。过小图片模糊，过大失去缩略图意义。",
+    "type": "int",
+    "default": 300
+  },
+  "thumbnail_cache_size": {
+    "description": "缩略图 LRU 缓存数量。缓存已生成的缩略图，避免重复计算。增大可减少重复生成但增加内存占用。推荐值：500-2000，根据图片数量调整。",
+    "type": "int",
+    "default": 500
+  },
+  "max_api_images": {
+    "description": "API 单次返回的最大图片数量。影响 WebUI 图片列表和搜索结果的分页大小。推荐值：50-100。过大可能影响页面加载速度。",
+    "type": "int",
+    "default": 50
   }
 }

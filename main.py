@@ -665,8 +665,9 @@ class CollectImagePlugin(Star):
                     
                     logger.info(f"[CollectImage] 角色识别成功，共 {len(data)} 个结果, AI检测: {ai_detect}")
                     
-                    # API 调用后等待 3 秒（频率控制）
-                    await asyncio.sleep(3)
+                    # API 调用后等待（频率控制）
+                    anime_trace_delay = getattr(self.config, 'anime_trace_delay', 3)
+                    await asyncio.sleep(anime_trace_delay)
                     
                     return {"character": "未知", "ai_detect": ai_detect, "all_results": data}
                     
@@ -680,18 +681,22 @@ class CollectImagePlugin(Star):
         from io import BytesIO
         from PIL import Image
         try:
-            # 检查文件大小，如果超过2MB则压缩
+            # 从配置获取参数
+            max_file_size_mb = getattr(self.config, 'max_file_size_mb', 2)
+            max_dimension = getattr(self.config, 'max_image_dimension', 2000)
+            jpeg_quality = getattr(self.config, 'jpeg_quality', 85)
+            
+            # 检查文件大小
             file_size = os.path.getsize(file_path)
             image_base64 = None
             
-            if file_size > 2 * 1024 * 1024:  # 2MB
-                logger.info(f"[CollectImage] 图片文件过大 ({file_size/1024/1024:.2f}MB)，进行压缩")
+            if file_size > max_file_size_mb * 1024 * 1024:
+                logger.info(f"[CollectImage] 图片文件过大 ({file_size/1024/1024:.2f}MB > {max_file_size_mb}MB)，进行压缩")
                 with Image.open(file_path) as img:
                     # 获取原始尺寸
                     width, height = img.size
                     
-                    # 计算缩放比例（目标：长边不超过2000px，确保文件小于2MB）
-                    max_dimension = 2000
+                    # 计算缩放比例（等比例缩放）
                     if max(width, height) > max_dimension:
                         scale = max_dimension / max(width, height)
                         new_width = int(width * scale)
@@ -705,7 +710,7 @@ class CollectImagePlugin(Star):
                     
                     # 压缩保存
                     buffer = BytesIO()
-                    img.save(buffer, format='JPEG', quality=85, optimize=True)
+                    img.save(buffer, format='JPEG', quality=jpeg_quality, optimize=True)
                     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
                     logger.info(f"[CollectImage] 压缩后大小: {len(buffer.getvalue())/1024:.2f}KB")
             else:

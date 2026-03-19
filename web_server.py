@@ -14,8 +14,9 @@ from PIL import Image
 from astrbot.api import logger
 
 
-# 缩略图配置
-THUMBNAIL_SIZE = (300, 300)
+# 缩略图默认配置（可被配置覆盖）
+DEFAULT_THUMBNAIL_SIZE = 300
+DEFAULT_THUMBNAIL_CACHE_SIZE = 500
 THUMBNAIL_CACHE_DIR = None
 
 
@@ -28,12 +29,11 @@ def _get_thumbnail_cache_dir() -> Path:
     return THUMBNAIL_CACHE_DIR
 
 
-@lru_cache(maxsize=500)
-def _generate_thumbnail_cached(image_path: str) -> bytes:
+def _generate_thumbnail_cached(image_path: str, thumbnail_size: int = DEFAULT_THUMBNAIL_SIZE) -> bytes:
     """生成缩略图（带缓存）"""
     try:
         with Image.open(image_path) as img:
-            img.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+            img.thumbnail((thumbnail_size, thumbnail_size), Image.Resampling.LANCZOS)
             
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
@@ -69,6 +69,13 @@ class WebServer:
         self._cookie_name = "collectimage_webui_session"
         self._sessions: dict[str, float] = {}
         
+        # 登录限制
+        self._login_attempts: dict[str, list[float]] = {}  # IP -> [timestamp1, timestamp2, ...]
+        self._blocked_ips: dict[str, float] = {}  # IP -> unblock_timestamp
+        self.MAX_LOGIN_ATTEMPTS = 3
+        self.BLOCK_DURATION = 300  # 5分钟封禁
+        self.ATTEMPT_WINDOW = 300  # 5分钟内
+        
         self._import_state = {
             "running": False,
             "total": 0,
@@ -103,6 +110,18 @@ class WebServer:
         self.app.router.add_get("/api/stats", self.handle_get_stats)
         self.app.router.add_get("/api/health", self.handle_health_check)
 
+        # 配置管理
+        self.app.router.add_get("/api/config", self.handle_get_config)
+        self.app.router.add_put("/api/config", self.handle_update_config)
+        self.app.router.add_get("/api/config/schema", self.handle_get_config_schema)
+
+        # 文件上传
+        self.app.router.add_post("/api/images/upload", self.handle_upload_image)
+
+        # 批量操作
+        self.app.router.add_delete("/api/images/batch", self.handle_batch_delete_images)
+        self.app.router.add_put("/api/images/batch/confirm", self.handle_batch_confirm_images)
+
         self.app.router.add_get("/", self.handle_index)
         self.app.router.add_get("/index.html", self.handle_index)
         self.app.router.add_get("/favicon.ico", self.handle_favicon)
@@ -132,6 +151,39 @@ class WebServer:
                 del self._sessions[session]
             return False
         return True
+
+    def _get_client_ip(self, request: web.Request) -> str:
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        return request.remote or "unknown"
+
+    def _is_ip_blocked(self, ip: str) -> bool:
+        if ip not in self._blocked_ips:
+            return False
+        if time.time() > self._blocked_ips[ip]:
+            del self._blocked_ips[ip]
+            if ip in self._login_attempts:
+                del self._login_attempts[ip]
+            return False
+        return True
+
+    def _record_failed_attempt(self, ip: str):
+        now = time.time()
+        if ip not in self._login_attempts:
+            self._login_attempts[ip] = []
+        self._login_attempts[ip].append(now)
+        cutoff = now - self.ATTEMPT_WINDOW
+        self._login_attempts[ip] = [t for t in self._login_attempts[ip] if t > cutoff]
+        if len(self._login_attempts[ip]) >= self.MAX_LOGIN_ATTEMPTS:
+            self._blocked_ips[ip] = now + self.BLOCK_DURATION
+            logger.warning(f"[CollectImage] IP {ip} 已被封禁 {self.BLOCK_DURATION} 秒")
+
+    def _get_block_remaining(self, ip: str) -> int:
+        if ip not in self._blocked_ips:
+            return 0
+        remaining = int(self._blocked_ips[ip] - time.time())
+        return max(0, remaining)
 
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler):
@@ -163,11 +215,22 @@ class WebServer:
 
     async def handle_login(self, request: web.Request) -> web.Response:
         try:
+            client_ip = self._get_client_ip(request)
+            
+            if self._is_ip_blocked(client_ip):
+                remaining = self._get_block_remaining(client_ip)
+                minutes = remaining // 60
+                seconds = remaining % 60
+                return self._err(f"登录过于频繁，请等待 {minutes}分{seconds}秒 后重试", 429)
+            
             data = await request.json()
             password = data.get("password", "")
             expected_password = getattr(self.plugin.config, "webui_password", "") or "admin123"
             
             if password == expected_password:
+                if client_ip in self._login_attempts:
+                    del self._login_attempts[client_ip]
+                
                 session = secrets.token_hex(16)
                 self._sessions[session] = time.time() + self.SESSION_TIMEOUT
                 response = self._ok({"message": "登录成功"})
@@ -180,7 +243,10 @@ class WebServer:
                     samesite="Lax"
                 )
                 return response
-            return self._err("密码错误", 401)
+            
+            self._record_failed_attempt(client_ip)
+            attempts = len(self._login_attempts.get(client_ip, []))
+            return self._err(f"密码错误（{attempts}/{self.MAX_LOGIN_ATTEMPTS}）", 401)
         except Exception as e:
             return self._err(f"登录失败: {e}")
 
@@ -202,8 +268,13 @@ class WebServer:
         description = request.query.get("description")
         group_id = request.query.get("group_id")
         confirmed = request.query.get("confirmed")
-        limit = int(request.query.get("limit", 50))
+        max_limit = getattr(self.plugin.config, 'max_api_images', 50)
+        limit = int(request.query.get("limit", max_limit))
         offset = int(request.query.get("offset", 0))
+        
+        # 限制最大数量
+        if limit > max_limit:
+            limit = max_limit
         
         confirmed_val = None
         if confirmed is not None:
@@ -231,14 +302,16 @@ class WebServer:
     async def handle_search_images(self, request: web.Request) -> web.Response:
         """搜索图片（支持别名匹配，与 /moe 命令相同的搜索逻辑）"""
         keyword = request.query.get("keyword", "")
-        limit = int(request.query.get("limit", 50))
+        max_limit = getattr(self.plugin.config, 'max_api_images', 50)
+        limit = int(request.query.get("limit", max_limit))
         confirmed = request.query.get("confirmed")
         
         if not keyword:
             return self._err("关键词不能为空")
         
-        if limit > 100:
-            limit = 100
+        # 限制最大数量
+        if limit > max_limit:
+            limit = max_limit
         
         confirmed_val = None
         if confirmed is not None:
@@ -307,6 +380,62 @@ class WebServer:
         
         self.plugin.db.delete_image(image_id)
         return self._ok({"message": "删除成功"})
+
+    async def handle_batch_delete_images(self, request: web.Request) -> web.Response:
+        """批量删除图片"""
+        try:
+            data = await request.json()
+            image_ids = data.get("image_ids", [])
+            
+            if not image_ids:
+                return self._err("请选择要删除的图片")
+            
+            if len(image_ids) > 100:
+                return self._err("单次最多删除100张图片")
+            
+            deleted_count = 0
+            for image_id in image_ids:
+                image = self.plugin.db.get_image_by_id(image_id)
+                if image:
+                    try:
+                        if os.path.exists(image["file_path"]):
+                            os.remove(image["file_path"])
+                    except Exception as e:
+                        logger.warning(f"[CollectImage] 删除图片文件失败: {e}")
+                    self.plugin.db.delete_image(image_id)
+                    deleted_count += 1
+            
+            return self._ok({"message": f"成功删除 {deleted_count} 张图片", "deleted": deleted_count})
+        except Exception as e:
+            logger.error(f"[CollectImage] 批量删除失败: {e}")
+            return self._err(str(e))
+
+    async def handle_batch_confirm_images(self, request: web.Request) -> web.Response:
+        """批量确认/取消确认图片"""
+        try:
+            data = await request.json()
+            image_ids = data.get("image_ids", [])
+            confirmed = data.get("confirmed", True)
+            
+            if not image_ids:
+                return self._err("请选择要操作的图片")
+            
+            if len(image_ids) > 100:
+                return self._err("单次最多操作100张图片")
+            
+            confirmed_val = 1 if confirmed else 0
+            updated_count = 0
+            for image_id in image_ids:
+                image = self.plugin.db.get_image_by_id(image_id)
+                if image:
+                    self.plugin.db.update_confirmed(image_id, confirmed_val)
+                    updated_count += 1
+            
+            action = "确认" if confirmed else "取消确认"
+            return self._ok({"message": f"成功{action} {updated_count} 张图片", "updated": updated_count})
+        except Exception as e:
+            logger.error(f"[CollectImage] 批量操作失败: {e}")
+            return self._err(str(e))
 
     async def handle_reanalyze(self, request: web.Request) -> web.Response:
         image_id = int(request.match_info["image_id"])
@@ -418,6 +547,135 @@ class WebServer:
     async def handle_health_check(self, request: web.Request) -> web.Response:
         return self._ok({"status": "ok"})
 
+    async def handle_upload_image(self, request: web.Request) -> web.Response:
+        """上传图片文件进行分析"""
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+            if field.name != 'file':
+                return self._err("无效的文件字段")
+            
+            filename = field.filename
+            if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
+                return self._err("不支持的文件格式，请上传 JPG/PNG/GIF/WebP/BMP 图片")
+            
+            file_data = b''
+            while True:
+                chunk = await field.read_chunk()
+                if not chunk:
+                    break
+                file_data += chunk
+            
+            if len(file_data) > 50 * 1024 * 1024:
+                return self._err("文件大小超过50MB限制")
+            
+            import hashlib
+            from PIL import Image
+            file_hash = hashlib.md5(file_data).hexdigest()
+            
+            if self.plugin.db.is_hash_exists(file_hash):
+                return self._err("图片已存在（重复上传）")
+            
+            timestamp = int(time.time())
+            ext = os.path.splitext(filename)[1] or '.jpg'
+            image_filename = f"{timestamp}_webui_upload{ext}"
+            image_path = os.path.join(self.plugin.images_dir, image_filename)
+            
+            with open(image_path, 'wb') as f:
+                f.write(file_data)
+            
+            try:
+                tags = {}
+                description = ""
+                
+                char_result = await self.plugin.recognize_character_from_file(image_path)
+                all_results = char_result.get("all_results", [])
+                ai_detect = char_result.get("ai_detect", "")
+                character = self.plugin._extract_characters(all_results)
+                
+                person_count = len(all_results)
+                confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+                confirmed = 1 if (person_count > 0 and confirmed_count == person_count) else 0
+                
+                image_data = {
+                    'file_hash': file_hash,
+                    'file_path': image_path,
+                    'file_name': image_filename,
+                    'group_id': 'webui',
+                    'sender_id': 'manual',
+                    'timestamp': timestamp,
+                    'tags': json.dumps(tags, ensure_ascii=False),
+                    'character': character,
+                    'description': description,
+                    'ai_detect': ai_detect,
+                    'confirmed': confirmed,
+                    'created_at': timestamp
+                }
+                
+                if self.plugin.db.add_image(image_data):
+                    return self._ok({
+                        "message": "图片导入成功",
+                        "image_id": self.plugin.db.get_image_by_hash(file_hash).get('id'),
+                        "file_name": image_filename
+                    })
+                else:
+                    os.remove(image_path)
+                    return self._err("保存到数据库失败")
+            except Exception as e:
+                logger.error(f"[CollectImage] 处理图片失败: {e}")
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+                return self._err(f"处理图片失败: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"[CollectImage] 文件上传失败: {e}")
+            return self._err(f"上传失败: {str(e)}")
+
+    async def handle_get_config(self, request: web.Request) -> web.Response:
+        """获取当前配置"""
+        try:
+            config_dict = {}
+            for key in self.plugin.config:
+                config_dict[key] = self.plugin.config.get(key)
+            return self._ok(config_dict)
+        except Exception as e:
+            return self._err(str(e))
+
+    async def handle_update_config(self, request: web.Request) -> web.Response:
+        """更新配置"""
+        try:
+            data = await request.json()
+            
+            # 更新配置
+            for key, value in data.items():
+                if key in self.plugin.config:
+                    self.plugin.config[key] = value
+            
+            # 保存配置文件
+            config_path = os.path.join(self.plugin.plugin_dir, "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "w", encoding="utf-8") as f:
+                    import json
+                    json.dump(dict(self.plugin.config), f, ensure_ascii=False, indent=2)
+            
+            return self._ok({"message": "配置已保存，插件将重启生效"})
+        except Exception as e:
+            logger.error(f"[CollectImage] 保存配置失败: {e}")
+            return self._err(str(e))
+
+    async def handle_get_config_schema(self, request: web.Request) -> web.Response:
+        """获取配置定义"""
+        try:
+            schema_path = os.path.join(self.plugin.plugin_dir, "_conf_schema.json")
+            if os.path.exists(schema_path):
+                with open(schema_path, "r", encoding="utf-8") as f:
+                    import json
+                    schema = json.load(f)
+                return self._ok(schema)
+            return self._err("配置定义文件不存在")
+        except Exception as e:
+            return self._err(str(e))
+
     async def handle_index(self, request: web.Request) -> web.Response:
         index_file = self.static_dir / "index.html"
         if index_file.exists():
@@ -447,7 +705,8 @@ class WebServer:
             
             if size == "thumb":
                 logger.info(f"[CollectImage] 请求缩略图: {file_path}")
-                thumbnail_data = _generate_thumbnail_cached(str(file_path))
+                thumbnail_size = getattr(self.plugin.config, 'thumbnail_size', DEFAULT_THUMBNAIL_SIZE)
+                thumbnail_data = _generate_thumbnail_cached(str(file_path), thumbnail_size)
                 
                 if thumbnail_data:
                     return web.Response(

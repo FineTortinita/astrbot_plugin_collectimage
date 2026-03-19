@@ -489,6 +489,8 @@ function bindEventListeners() {
                 loadImages();
             } else if (tabName === 'stats') {
                 loadStats();
+            } else if (tabName === 'config') {
+                loadConfig();
             }
         });
     });
@@ -671,6 +673,167 @@ function bindEventListeners() {
             }
         });
     }
+
+    // 保存配置按钮
+    const saveConfigBtn = document.getElementById('save-config-btn');
+    if (saveConfigBtn) {
+        saveConfigBtn.addEventListener('click', async () => {
+            await showConfirm('保存配置', '确定要保存配置吗？插件将自动重启以应用新配置。');
+            await saveConfig();
+        });
+    }
+
+    // 重置配置按钮
+    const resetConfigBtn = document.getElementById('reset-config-btn');
+    if (resetConfigBtn) {
+        resetConfigBtn.addEventListener('click', () => {
+            resetConfig();
+        });
+    }
+
+    // 文件上传相关
+    const importBtn = document.getElementById('import-btn');
+    const importModal = document.getElementById('import-modal');
+    const cancelImportBtn = document.getElementById('cancel-import-btn');
+    const startImportBtn = document.getElementById('start-import-btn');
+    const fileInput = document.getElementById('file-input');
+    const dropZone = document.getElementById('drop-zone');
+    const fileList = document.getElementById('file-list');
+    let selectedFiles = [];
+
+    if (importBtn) {
+        importBtn.addEventListener('click', () => {
+            if (importModal) importModal.classList.remove('hidden');
+        });
+    }
+
+    if (cancelImportBtn) {
+        cancelImportBtn.addEventListener('click', () => {
+            if (importModal) importModal.classList.add('hidden');
+            selectedFiles = [];
+            if (fileList) {
+                fileList.innerHTML = '';
+                fileList.classList.add('hidden');
+            }
+            if (fileInput) fileInput.value = '';
+        });
+    }
+
+    if (importModal) {
+        importModal.addEventListener('click', (e) => {
+            if (e.target === importModal || e.target.classList.contains('backdrop-blur-sm')) {
+                importModal.classList.add('hidden');
+            }
+        });
+    }
+
+    if (dropZone) {
+        dropZone.addEventListener('click', () => fileInput?.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-purple-400', 'bg-purple-50');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-purple-400', 'bg-purple-50');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-purple-400', 'bg-purple-50');
+            const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+            addFilesToList(files);
+        });
+    }
+
+    if (fileInput) {
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            addFilesToList(files);
+        });
+    }
+
+    function addFilesToList(files) {
+        selectedFiles = [...selectedFiles, ...files];
+        if (fileList) {
+            fileList.classList.remove('hidden');
+            fileList.innerHTML = selectedFiles.map((f, i) => `
+                <div class="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                    <span class="text-sm text-gray-700 truncate">${f.name}</span>
+                    <button class="remove-file text-red-500 hover:text-red-700" data-index="${i}">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            `).join('');
+            lucide.createIcons();
+            fileList.querySelectorAll('.remove-file').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.dataset.index);
+                    selectedFiles.splice(idx, 1);
+                    if (fileInput) fileInput.value = '';
+                    addFilesToList([]);
+                    if (selectedFiles.length === 0 && fileList) fileList.classList.add('hidden');
+                });
+            });
+        }
+    }
+
+    if (startImportBtn) {
+        startImportBtn.addEventListener('click', async () => {
+            if (selectedFiles.length === 0) {
+                showToast('请选择要导入的图片', 'warning');
+                return;
+            }
+            
+            startImportBtn.disabled = true;
+            startImportBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 inline mr-1 animate-spin"></i>导入中...';
+            lucide.createIcons();
+            
+            let successCount = 0;
+            let failCount = 0;
+            
+            for (const file of selectedFiles) {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/images/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        successCount++;
+                    } else {
+                        failCount++;
+                        console.warn(`导入失败: ${file.name}`, data.error);
+                    }
+                } catch (e) {
+                    failCount++;
+                    console.error(`导入失败: ${file.name}`, e);
+                }
+            }
+            
+            selectedFiles = [];
+            if (fileList) {
+                fileList.innerHTML = '';
+                fileList.classList.add('hidden');
+            }
+            if (fileInput) fileInput.value = '';
+            if (importModal) importModal.classList.add('hidden');
+            
+            startImportBtn.disabled = false;
+            startImportBtn.innerHTML = '<i data-lucide="upload" class="w-4 h-4 inline mr-1"></i>开始导入';
+            lucide.createIcons();
+            
+            if (failCount === 0) {
+                showToast(`成功导入 ${successCount} 张图片`, 'success');
+            } else {
+                showToast(`导入完成: ${successCount} 成功, ${failCount} 失败`, 'warning');
+            }
+            
+            loadImages();
+        });
+    }
 }
 
 // 检查登录状态
@@ -769,9 +932,15 @@ async function searchImagesWithAlias(keyword) {
     }
 }
 
+let selectedImages = new Set();
+let imageIdMap = new Map();
+
 // 渲染图片列表
 function renderImages(images) {
     imageGrid.innerHTML = '';
+    selectedImages.clear();
+    imageIdMap.clear();
+    updateBatchOperationsUI();
     
     if (images.length === 0) {
         imageGrid.innerHTML = `
@@ -785,8 +954,10 @@ function renderImages(images) {
     }
 
     images.forEach(img => {
+        imageIdMap.set(img.file_name, img.id);
         const card = document.createElement('div');
-        card.className = 'image-card glass-card rounded-xl overflow-hidden cursor-pointer';
+        card.className = 'image-card glass-card rounded-xl overflow-hidden cursor-pointer relative';
+        card.dataset.filename = img.file_name;
         
         let tagsText = '';
         if (img.tags) {
@@ -809,26 +980,152 @@ function renderImages(images) {
         }
         
         card.innerHTML = `
+            <div class="absolute top-2 left-2 z-10">
+                <input type="checkbox" class="image-checkbox w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400 cursor-pointer" data-filename="${img.file_name}">
+            </div>
             <div class="aspect-square overflow-hidden bg-gray-100">
                 <img src="${API_BASE}/images/${img.file_name}?size=thumb" alt="${img.file_name}" loading="lazy" class="w-full h-full object-cover">
             </div>
             <div class="p-3">
                 <div class="flex items-center justify-between gap-2 mb-1">
                     <div class="font-medium text-sm text-gray-800 truncate flex-1">${characterText}</div>
-                    <span class="confirm-badge ${img.confirmed ? 'confirmed' : 'unconfirmed'}" title="${img.confirmed ? '已确认' : '已确认'}">
+                    <span class="confirm-badge ${img.confirmed ? 'confirmed' : 'unconfirmed'}" title="${img.confirmed ? '已确认' : '未确认'}">
                         ${img.confirmed ? '✓' : '⚠'}
                     </span>
                 </div>
-                <div class="text-xs text-gray-500 truncate">${tagsText || '无标签'}</div>
+            <div class="text-xs text-gray-500 truncate">${tagsText || '无标签'}</div>
             </div>
         `;
         
-        card.addEventListener('click', () => openDetail(img.id));
+        const checkbox = card.querySelector('.image-checkbox');
+        checkbox.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (checkbox.checked) {
+                selectedImages.add(img.file_name);
+            } else {
+                selectedImages.delete(img.file_name);
+            }
+            updateBatchOperationsUI();
+        });
+        
+        card.addEventListener('click', (e) => {
+            if (e.target.type === 'checkbox') return;
+            openDetail(img.id);
+        });
         imageGrid.appendChild(card);
     });
     
     lucide.createIcons();
 }
+
+// 更新批量操作UI
+function updateBatchOperationsUI() {
+    const batchOps = document.getElementById('batch-operations');
+    const selectedCount = document.getElementById('selected-count');
+    const selectAllCheckbox = document.getElementById('select-all');
+    
+    if (selectedImages.size > 0) {
+        batchOps?.classList.remove('hidden');
+        if (selectedCount) selectedCount.textContent = `已选择 ${selectedImages.size} 张图片`;
+    } else {
+        batchOps?.classList.add('hidden');
+    }
+    
+    if (selectAllCheckbox) {
+        const allCheckboxes = document.querySelectorAll('.image-checkbox');
+        selectAllCheckbox.checked = allCheckboxes.length > 0 && selectedImages.size === allCheckboxes.length;
+    }
+}
+
+// 全选按钮
+document.getElementById('select-all')?.addEventListener('change', (e) => {
+    const checkboxes = document.querySelectorAll('.image-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = e.target.checked;
+        const filename = cb.dataset.filename;
+        if (e.target.checked) {
+            selectedImages.add(filename);
+        } else {
+            selectedImages.delete(filename);
+        }
+    });
+    updateBatchOperationsUI();
+});
+
+// 批量确认
+document.getElementById('batch-confirm-btn')?.addEventListener('click', async () => {
+    if (selectedImages.size === 0) return;
+    if (!await showConfirm('批量确认', `确定要确认选中的 ${selectedImages.size} 张图片吗？`)) return;
+    
+    const imageIds = Array.from(selectedImages).map(fn => imageIdMap.get(fn)).filter(id => id);
+    try {
+        const response = await fetch(`${API_BASE}/api/images/batch/confirm`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_ids: imageIds, confirmed: true })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.message, 'success');
+            selectedImages.clear();
+            loadImages();
+        } else {
+            showToast('操作失败: ' + data.error, 'error');
+        }
+    } catch (e) {
+        showToast('操作失败: ' + e.message, 'error');
+    }
+});
+
+// 批量取消确认
+document.getElementById('batch-unconfirm-btn')?.addEventListener('click', async () => {
+    if (selectedImages.size === 0) return;
+    if (!await showConfirm('取消确认', `确定要取消确认选中的 ${selectedImages.size} 张图片吗？`)) return;
+    
+    const imageIds = Array.from(selectedImages).map(fn => imageIdMap.get(fn)).filter(id => id);
+    try {
+        const response = await fetch(`${API_BASE}/api/images/batch/confirm`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_ids: imageIds, confirmed: false })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.message, 'success');
+            selectedImages.clear();
+            loadImages();
+        } else {
+            showToast('操作失败: ' + data.error, 'error');
+        }
+    } catch (e) {
+        showToast('操作失败: ' + e.message, 'error');
+    }
+});
+
+// 批量删除
+document.getElementById('batch-delete-btn')?.addEventListener('click', async () => {
+    if (selectedImages.size === 0) return;
+    if (!await showConfirm('批量删除', `确定要删除选中的 ${selectedImages.size} 张图片吗？此操作不可恢复！`)) return;
+    
+    const imageIds = Array.from(selectedImages).map(fn => imageIdMap.get(fn)).filter(id => id);
+    try {
+        const response = await fetch(`${API_BASE}/api/images/batch`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_ids: imageIds })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.message, 'success');
+            selectedImages.clear();
+            loadImages();
+        } else {
+            showToast('删除失败: ' + data.error, 'error');
+        }
+    } catch (e) {
+        showToast('删除失败: ' + e.message, 'error');
+    }
+});
 
 // 更新分页信息
 function updatePagination() {
@@ -938,6 +1235,188 @@ function updateStatsChart(dailyData) {
     });
 }
  
+// 全局配置变量
+let configSchema = null;
+let originalConfig = null;
+
+// 加载配置
+async function loadConfig() {
+    const configForm = document.getElementById('config-form');
+    
+    try {
+        // 并行加载配置和配置定义
+        const [configRes, schemaRes] = await Promise.all([
+            fetch(`${API_BASE}/api/config`),
+            fetch(`${API_BASE}/api/config/schema`)
+        ]);
+        
+        const configData = await configRes.json();
+        const schemaData = await schemaRes.json();
+        
+        if (!configData.success || !schemaData.success) {
+            configForm.innerHTML = '<p class="text-red-500">加载配置失败</p>';
+            return;
+        }
+        
+        // 过滤掉 API 响应中的非配置字段
+        const filteredConfig = {};
+        const filteredSchema = {};
+        
+        for (const [key, value] of Object.entries(configData)) {
+            if (key !== 'success' && key !== 'message' && key !== 'error') {
+                filteredConfig[key] = value;
+            }
+        }
+        
+        for (const [key, value] of Object.entries(schemaData)) {
+            if (key !== 'success' && key !== 'message' && key !== 'error') {
+                filteredSchema[key] = value;
+            }
+        }
+        
+        originalConfig = filteredConfig;
+        configSchema = filteredSchema;
+        
+        // 生成配置表单
+        renderConfigForm(filteredConfig, filteredSchema);
+        
+    } catch (e) {
+        console.error('加载配置失败:', e);
+        configForm.innerHTML = '<p class="text-red-500">加载配置失败: ' + e.message + '</p>';
+    }
+}
+
+// 渲染配置表单
+function renderConfigForm(config, schema) {
+    const configForm = document.getElementById('config-form');
+    let html = '';
+    
+    for (const [key, def] of Object.entries(schema)) {
+        const value = config[key] !== undefined ? config[key] : def.default;
+        const description = def.description || '';
+        
+        // 跳过密码字段的显示（安全考虑）
+        if (key === 'webui_password') {
+            html += `
+                <div class="config-item">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
+                    <p class="text-xs text-gray-500 mb-2">${description}</p>
+                    <input type="password" id="config-${key}" value="${value}" 
+                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                </div>
+            `;
+            continue;
+        }
+        
+        // 根据类型生成不同的输入控件
+        if (def.type === 'bool') {
+            html += `
+                <div class="config-item">
+                    <label class="flex items-center gap-3 cursor-pointer">
+                        <input type="checkbox" id="config-${key}" ${value ? 'checked' : ''} 
+                            class="w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400">
+                        <div>
+                            <span class="text-sm font-medium text-gray-700">${key}</span>
+                            <p class="text-xs text-gray-500">${description}</p>
+                        </div>
+                    </label>
+                </div>
+            `;
+        } else if (def.type === 'int') {
+            html += `
+                <div class="config-item">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
+                    <p class="text-xs text-gray-500 mb-2">${description}</p>
+                    <input type="number" id="config-${key}" value="${value}" 
+                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                </div>
+            `;
+        } else if (def.type === 'list') {
+            const listValue = Array.isArray(value) ? value.join(',') : '';
+            html += `
+                <div class="config-item">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
+                    <p class="text-xs text-gray-500 mb-2">${description}</p>
+                    <input type="text" id="config-${key}" value="${listValue}" placeholder="用逗号分隔多个值"
+                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                </div>
+            `;
+        } else if (key === 'filter_prompt') {
+            html += `
+                <div class="config-item">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
+                    <p class="text-xs text-gray-500 mb-2">${description}</p>
+                    <textarea id="config-${key}" rows="6" 
+                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none resize-none">${value}</textarea>
+                </div>
+            `;
+        } else {
+            html += `
+                <div class="config-item">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
+                    <p class="text-xs text-gray-500 mb-2">${description}</p>
+                    <input type="text" id="config-${key}" value="${value}" 
+                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                </div>
+            `;
+        }
+    }
+    
+    configForm.innerHTML = html;
+    lucide.createIcons();
+}
+
+// 保存配置
+async function saveConfig() {
+    if (!configSchema) return;
+    
+    const newConfig = {};
+    
+    for (const [key, def] of Object.entries(configSchema)) {
+        const input = document.getElementById(`config-${key}`);
+        if (!input) continue;
+        
+        if (def.type === 'bool') {
+            newConfig[key] = input.checked;
+        } else if (def.type === 'int') {
+            newConfig[key] = parseInt(input.value) || def.default;
+        } else if (def.type === 'list') {
+            const listStr = input.value.trim();
+            newConfig[key] = listStr ? listStr.split(',').map(s => s.trim()) : [];
+        } else {
+            newConfig[key] = input.value;
+        }
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newConfig)
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('配置已保存，页面将在3秒后刷新', 'success');
+            setTimeout(() => {
+                location.reload();
+            }, 3000);
+        } else {
+            showToast('保存失败: ' + data.error, 'error');
+        }
+    } catch (e) {
+        showToast('保存失败: ' + e.message, 'error');
+    }
+}
+
+// 重置配置
+function resetConfig() {
+    if (originalConfig && configSchema) {
+        renderConfigForm(originalConfig, configSchema);
+        showToast('配置已重置', 'info');
+    }
+}
+
 // 点击详情弹窗外部的处理函数
 async function handleDetailOverlayClick() {
     await autoSaveAndClose();

@@ -79,6 +79,35 @@ class Database:
         conn.close()
         return result
 
+    def add_image(self, image_data: dict) -> bool:
+        """从字典添加图片记录"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO images 
+                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect, confirmed) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    image_data.get('file_hash'),
+                    image_data.get('file_path'),
+                    image_data.get('file_name'),
+                    image_data.get('group_id'),
+                    image_data.get('sender_id'),
+                    image_data.get('timestamp'),
+                    image_data.get('tags'),
+                    image_data.get('character'),
+                    image_data.get('description'),
+                    image_data.get('ai_detect'),
+                    image_data.get('confirmed', 0),
+                ),
+            )
+            conn.commit()
+            conn.close()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
     def insert_image(
         self,
         file_hash: str,
