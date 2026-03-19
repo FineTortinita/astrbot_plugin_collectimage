@@ -675,11 +675,43 @@ class CollectImagePlugin(Star):
             return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
 
     async def recognize_character_from_file(self, file_path: str) -> dict:
-        """从本地文件识别角色（使用 base64 上传）"""
+        """从本地文件识别角色（使用 base64 上传），图片过大时自动压缩"""
         import base64
+        from io import BytesIO
         try:
-            with open(file_path, 'rb') as f:
-                image_base64 = base64.b64encode(f.read()).decode('utf-8')
+            # 检查文件大小，如果超过2MB则压缩
+            file_size = os.path.getsize(file_path)
+            image_base64 = None
+            
+            if file_size > 2 * 1024 * 1024:  # 2MB
+                logger.info(f"[CollectImage] 图片文件过大 ({file_size/1024/1024:.2f}MB)，进行压缩")
+                with Image.open(file_path) as img:
+                    # 获取原始尺寸
+                    width, height = img.size
+                    
+                    # 计算缩放比例（目标：长边不超过2000px，确保文件小于2MB）
+                    max_dimension = 2000
+                    if max(width, height) > max_dimension:
+                        scale = max_dimension / max(width, height)
+                        new_width = int(width * scale)
+                        new_height = int(height * scale)
+                        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        logger.info(f"[CollectImage] 缩放图片: {width}x{height} -> {new_width}x{new_height}")
+                    
+                    # 转换为RGB（如果是RGBA）
+                    if img.mode in ('RGBA', 'P'):
+                        img = img.convert('RGB')
+                    
+                    # 压缩保存
+                    buffer = BytesIO()
+                    img.save(buffer, format='JPEG', quality=85, optimize=True)
+                    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                    logger.info(f"[CollectImage] 压缩后大小: {len(buffer.getvalue())/1024:.2f}KB")
+            else:
+                # 文件大小正常，直接读取
+                with open(file_path, 'rb') as f:
+                    image_base64 = base64.b64encode(f.read()).decode('utf-8')
+            
             return await self.recognize_character(image_url=None, image_base64=image_base64)
         except Exception as e:
             logger.error(f"[CollectImage] 读取图片文件失败: {e}")
