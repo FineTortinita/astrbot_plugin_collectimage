@@ -678,6 +678,7 @@ class CollectImagePlugin(Star):
         """从本地文件识别角色（使用 base64 上传），图片过大时自动压缩"""
         import base64
         from io import BytesIO
+        from PIL import Image
         try:
             # 检查文件大小，如果超过2MB则压缩
             file_size = os.path.getsize(file_path)
