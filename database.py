@@ -332,6 +332,7 @@ class Database:
         confirmed: int = None,
         limit: int = 50,
         offset: int = 0,
+        random: bool = False,
     ) -> list:
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -353,9 +354,10 @@ class Database:
             conditions.append("confirmed = ?")
             params.append(confirmed)
         where_clause = " AND ".join(conditions) if conditions else "1=1"
+        order_clause = "ORDER BY RANDOM()" if random else "ORDER BY timestamp DESC"
         params.extend([limit, offset])
         cursor.execute(
-            f"SELECT * FROM images WHERE {where_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM images WHERE {where_clause} {order_clause} LIMIT ? OFFSET ?",
             params,
         )
         rows = cursor.fetchall()

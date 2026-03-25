@@ -288,6 +288,7 @@ class WebServer:
             confirmed=confirmed_val,
             limit=limit,
             offset=offset,
+            random=True,
         )
         total = self.plugin.db.count_images(confirmed=confirmed_val)
         
