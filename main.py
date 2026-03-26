@@ -442,7 +442,7 @@ class CollectImagePlugin(Star):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
-    def _check_image_size(self, file_path: str, min_size: int = 300) -> bool:
+    def _check_image_size(self, file_path: str, min_size: int = 600) -> bool:
         """检查图片尺寸，长或宽小于min_size返回False"""
         try:
             with PILImage.open(file_path) as img:
