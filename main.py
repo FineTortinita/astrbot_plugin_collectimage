@@ -872,7 +872,16 @@ class CollectImagePlugin(Star):
                     except ValueError:
                         count = 1
         
-        if not kw or kw == "stats":
+        if not kw:
+            results = self.db.search_all_random_with_alias(keyword="", limit=1)
+            if not results:
+                yield event.plain_result("暂无图片")
+                return
+            for img in results:
+                yield event.image_result(img["file_path"])
+            return
+        
+        if kw == "stats":
             total = self.db.count_images()
             yield event.plain_result(f"📊 图片收集统计\n\n共收集 {total} 张图片")
             return
