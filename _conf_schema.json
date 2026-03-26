@@ -58,5 +58,10 @@
     "description": "API 单次返回的最大图片数量。影响 WebUI 图片列表和搜索结果的分页大小。推荐值：50-100。过大可能影响页面加载速度。",
     "type": "int",
     "default": 50
+  },
+  "cors_origins": {
+    "description": "CORS 允许的来源列表。用于跨域访问控制，留空表示禁止跨域，仅允许同源访问。如需允许特定域名访问，请添加完整URL（如 https://example.com）。",
+    "type": "list",
+    "default": []
   }
 }
