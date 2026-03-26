@@ -83,8 +83,8 @@ class Database:
 
     def add_image(self, image_data: dict) -> bool:
         """从字典添加图片记录"""
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO images 
@@ -105,10 +105,11 @@ class Database:
                 ),
             )
             conn.commit()
-            conn.close()
             return True
         except sqlite3.IntegrityError:
             return False
+        finally:
+            conn.close()
 
     def insert_image(
         self,
@@ -124,8 +125,8 @@ class Database:
         ai_detect: Optional[str] = None,
         confirmed: int = 0,
     ) -> bool:
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO images 
@@ -146,10 +147,11 @@ class Database:
                 ),
             )
             conn.commit()
-            conn.close()
             return True
         except sqlite3.IntegrityError:
             return False
+        finally:
+            conn.close()
 
     def get_all_images(self, limit: int = 100, offset: int = 0) -> list:
         conn = self._get_connection()
@@ -366,13 +368,29 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
-    def count_images(self, confirmed: int = None) -> int:
+    def count_images(self, tag: str = None, character: str = None, description: str = None, 
+                     group_id: str = None, confirmed: int = None) -> int:
         conn = self._get_connection()
         cursor = conn.cursor()
+        conditions = []
+        params = []
+        if tag:
+            conditions.append("tags LIKE ?")
+            params.append(f"%{tag}%")
+        if character:
+            conditions.append("character LIKE ?")
+            params.append(f"%{character}%")
+        if description:
+            conditions.append("description LIKE ?")
+            params.append(f"%{description}%")
+        if group_id:
+            conditions.append("group_id = ?")
+            params.append(group_id)
         if confirmed is not None:
-            cursor.execute("SELECT COUNT(*) FROM images WHERE confirmed = ?", (confirmed,))
-        else:
-            cursor.execute("SELECT COUNT(*) FROM images")
+            conditions.append("confirmed = ?")
+            params.append(confirmed)
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        cursor.execute(f"SELECT COUNT(*) FROM images WHERE {where_clause}", params)
         count = cursor.fetchone()[0]
         conn.close()
         return count

@@ -306,7 +306,13 @@ class WebServer:
             offset=offset,
             random=True,
         )
-        total = self.plugin.db.count_images(confirmed=confirmed_val)
+        total = self.plugin.db.count_images(
+            tag=tag,
+            character=character,
+            description=description,
+            group_id=group_id,
+            confirmed=confirmed_val
+        )
         
         for img in images:
             if img.get("tags"):

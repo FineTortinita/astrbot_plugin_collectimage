@@ -170,7 +170,8 @@ class CollectImagePlugin(Star):
         
         try:
             # 下载图片到临时位置
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(image_url) as resp:
                     if resp.status != 200:
                         logger.error(f"[CollectImage] 下载图片失败: {resp.status}")
@@ -345,14 +346,14 @@ class CollectImagePlugin(Star):
     def _check_image_size(self, file_path: str, min_size: int = 300) -> bool:
         """检查图片尺寸，长或宽小于min_size返回False"""
         try:
-            from PIL import Image
             with PILImage.open(file_path) as img:
                 width, height = img.size
                 if width < min_size or height < min_size:
                     return False
                 return True
-        except Exception:
-            return True
+        except Exception as e:
+            logger.warning(f"[CollectImage] 图片尺寸检查失败: {file_path}, {e}")
+            return False
 
     def _is_sticker(self, img: Image, event: AstrMessageEvent | None = None, img_index: int = 0) -> bool:
         def is_emoji_summary(summary: object) -> bool:
@@ -797,6 +798,12 @@ class CollectImagePlugin(Star):
             yield event.image_result(img["file_path"])
 
     async def terminate(self):
+        if self._worker_task and not self._worker_task.done():
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
         if self.web_server:
             await self.web_server.stop()
         self.db.close()
