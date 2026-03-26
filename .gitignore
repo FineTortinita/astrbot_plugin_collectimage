@@ -213,4 +213,6 @@ records/
 web/cache/
 !tags_library.json
 config.json
+import_bangumi.py
+aliases.json
 
