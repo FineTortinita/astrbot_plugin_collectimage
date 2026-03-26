@@ -28,11 +28,11 @@ class CollectImagePlugin(Star):
         super().__init__(context)
         self.config = config
         self.plugin_dir = str(StarTools.get_data_dir("astrbot_plugin_collectimage"))
+        os.makedirs(self.plugin_dir, exist_ok=True)
         
         # 迁移旧数据
         self._migrate_old_data()
         
-        os.makedirs(self.plugin_dir, exist_ok=True)
         self.images_dir = os.path.join(self.plugin_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
         
@@ -55,7 +55,7 @@ class CollectImagePlugin(Star):
     def _migrate_old_data(self):
         """迁移旧数据到新目录"""
         import shutil
-        old_data_dir = os.path.join(os.path.dirname(__file__))
+        old_data_dir = os.path.dirname(__file__)
         
         # 检查旧目录是否存在数据库或图片目录
         old_db_path = os.path.join(old_data_dir, "collectimage.db")
@@ -68,14 +68,17 @@ class CollectImagePlugin(Star):
         
         migrated = False
         
-        # 迁移数据库
-        if os.path.exists(old_db_path) and not os.path.exists(new_db_path):
-            try:
-                shutil.copy2(old_db_path, new_db_path)
-                logger.info(f"[CollectImage] 已迁移数据库: {old_db_path} -> {new_db_path}")
-                migrated = True
-            except Exception as e:
-                logger.error(f"[CollectImage] 迁移数据库失败: {e}")
+        # 迁移数据库：旧文件存在且新文件不存在或新文件为空
+        if os.path.exists(old_db_path):
+            new_db_exists = os.path.exists(new_db_path)
+            new_db_empty = new_db_exists and os.path.getsize(new_db_path) == 0
+            if not new_db_exists or new_db_empty:
+                try:
+                    shutil.copy2(old_db_path, new_db_path)
+                    logger.info(f"[CollectImage] 已迁移数据库: {old_db_path} -> {new_db_path}")
+                    migrated = True
+                except Exception as e:
+                    logger.error(f"[CollectImage] 迁移数据库失败: {e}")
         
         # 迁移图片目录
         if os.path.exists(old_images_dir) and not os.path.exists(new_images_dir):
@@ -87,13 +90,16 @@ class CollectImagePlugin(Star):
                 logger.error(f"[CollectImage] 迁移图片目录失败: {e}")
         
         # 迁移别名文件
-        if os.path.exists(old_aliases_path) and not os.path.exists(new_aliases_path):
-            try:
-                shutil.copy2(old_aliases_path, new_aliases_path)
-                logger.info(f"[CollectImage] 已迁移别名文件: {old_aliases_path} -> {new_aliases_path}")
-                migrated = True
-            except Exception as e:
-                logger.error(f"[CollectImage] 迁移别名文件失败: {e}")
+        if os.path.exists(old_aliases_path):
+            new_aliases_exists = os.path.exists(new_aliases_path)
+            new_aliases_empty = new_aliases_exists and os.path.getsize(new_aliases_path) == 0
+            if not new_aliases_exists or new_aliases_empty:
+                try:
+                    shutil.copy2(old_aliases_path, new_aliases_path)
+                    logger.info(f"[CollectImage] 已迁移别名文件: {old_aliases_path} -> {new_aliases_path}")
+                    migrated = True
+                except Exception as e:
+                    logger.error(f"[CollectImage] 迁移别名文件失败: {e}")
         
         if migrated:
             logger.info("[CollectImage] 数据迁移完成")
