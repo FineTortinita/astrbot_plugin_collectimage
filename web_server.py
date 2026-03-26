@@ -12,6 +12,7 @@ from aiohttp import web
 from PIL import Image
 
 from astrbot.api import logger
+from astrbot.api.star import StarTools
 
 
 # 缩略图默认配置（可被配置覆盖）
@@ -24,14 +25,23 @@ def _get_thumbnail_cache_dir() -> Path:
     """获取缩略图缓存目录"""
     global THUMBNAIL_CACHE_DIR
     if THUMBNAIL_CACHE_DIR is None:
-        THUMBNAIL_CACHE_DIR = Path(__file__).parent / "web" / "cache" / "thumbs"
+        data_dir = Path(StarTools.get_data_dir("astrbot_plugin_collectimage"))
+        THUMBNAIL_CACHE_DIR = data_dir / "cache" / "thumbs"
         THUMBNAIL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return THUMBNAIL_CACHE_DIR
 
 
 def _generate_thumbnail_cached(image_path: str, thumbnail_size: int = DEFAULT_THUMBNAIL_SIZE) -> bytes:
-    """生成缩略图（带缓存）"""
+    """生成缩略图（带文件缓存）"""
     try:
+        import hashlib
+        cache_dir = _get_thumbnail_cache_dir()
+        cache_key = hashlib.md5(f"{image_path}_{thumbnail_size}".encode()).hexdigest()
+        cache_file = cache_dir / f"{cache_key}.jpg"
+        
+        if cache_file.exists():
+            return cache_file.read_bytes()
+        
         with Image.open(image_path) as img:
             img.thumbnail((thumbnail_size, thumbnail_size), Image.Resampling.LANCZOS)
             
@@ -40,7 +50,10 @@ def _generate_thumbnail_cached(image_path: str, thumbnail_size: int = DEFAULT_TH
             
             buffer = io.BytesIO()
             img.save(buffer, format='JPEG', quality=85, optimize=True)
-            return buffer.getvalue()
+            thumbnail_data = buffer.getvalue()
+        
+        cache_file.write_bytes(thumbnail_data)
+        return thumbnail_data
     except Exception as e:
         logger.error(f"[CollectImage] 生成缩略图失败: {image_path}, {e}")
         return b""
@@ -225,7 +238,10 @@ class WebServer:
             
             data = await request.json()
             password = data.get("password", "")
-            expected_password = getattr(self.plugin.config, "webui_password", "") or "admin123"
+            expected_password = getattr(self.plugin.config, "webui_password", "")
+            
+            if not expected_password:
+                return self._err("WebUI 密码未配置，请在插件配置中设置密码", 500)
             
             if password == expected_password:
                 if client_ip in self._login_attempts:
@@ -560,17 +576,35 @@ class WebServer:
             if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
                 return self._err("不支持的文件格式，请上传 JPG/PNG/GIF/WebP/BMP 图片")
             
-            file_data = b''
-            while True:
-                chunk = await field.read_chunk()
-                if not chunk:
-                    break
-                file_data += chunk
-            
-            if len(file_data) > 50 * 1024 * 1024:
-                return self._err("文件大小超过50MB限制")
+            timestamp = int(time.time())
+            ext = os.path.splitext(filename)[1] or '.jpg'
+            image_filename = f"{timestamp}_webui_upload{ext}"
+            image_path = os.path.join(self.plugin.images_dir, image_filename)
             
             import hashlib
+            hasher = hashlib.md5()
+            file_size = 0
+            
+            with open(image_path, 'wb') as f:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    hasher.update(chunk)
+                    file_size += len(chunk)
+                    
+                    if file_size > 50 * 1024 * 1024:
+                        f.close()
+                        os.remove(image_path)
+                        return self._err("文件大小超过50MB限制")
+            
+            file_hash = hasher.hexdigest()
+            
+            if self.plugin.db.is_hash_exists(file_hash):
+                os.remove(image_path)
+                return self._err("图片已存在（重复上传）")
+            
             from PIL import Image
             file_hash = hashlib.md5(file_data).hexdigest()
             
@@ -652,13 +686,6 @@ class WebServer:
                 if key in self.plugin.config:
                     self.plugin.config[key] = value
             
-            # 保存配置文件
-            config_path = os.path.join(self.plugin.plugin_dir, "config.json")
-            if os.path.exists(config_path):
-                with open(config_path, "w", encoding="utf-8") as f:
-                    import json
-                    json.dump(dict(self.plugin.config), f, ensure_ascii=False, indent=2)
-            
             return self._ok({"message": "配置已保存，插件将重启生效"})
         except Exception as e:
             logger.error(f"[CollectImage] 保存配置失败: {e}")
@@ -667,7 +694,7 @@ class WebServer:
     async def handle_get_config_schema(self, request: web.Request) -> web.Response:
         """获取配置定义"""
         try:
-            schema_path = os.path.join(self.plugin.plugin_dir, "_conf_schema.json")
+            schema_path = os.path.join(os.path.dirname(__file__), "_conf_schema.json")
             if os.path.exists(schema_path):
                 with open(schema_path, "r", encoding="utf-8") as f:
                     import json

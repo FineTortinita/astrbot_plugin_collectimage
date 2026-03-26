@@ -4,6 +4,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
+from astrbot.api import logger
+
 
 class Database:
     def __init__(self, db_dir: str):
@@ -165,7 +167,7 @@ class Database:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT * FROM images WHERE tags LIKE ? ORDER BY timestamp DESC LIMIT ?",
-            (f'%"tag"%', limit),
+            (f'%"{tag}"%', limit),
         )
         rows = cursor.fetchall()
         conn.close()
@@ -317,10 +319,10 @@ class Database:
                         try:
                             os.remove(file_path)
                             cleaned += 1
-                        except:
-                            pass
-        except Exception:
-            pass
+                        except Exception as e:
+                            logger.warning(f"[CollectImage] 删除孤立文件失败: {file_path}, {e}")
+        except Exception as e:
+            logger.error(f"[CollectImage] 清理孤立文件失败: {e}")
         return cleaned
 
     def search_images(
@@ -532,12 +534,12 @@ class Database:
                         )
                         if cursor.rowcount > 0:
                             imported += 1
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"[CollectImage] 导入别名失败: {original_name} -> {alias}, {e}")
             conn.commit()
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"[CollectImage] 批量导入别名失败: {e}")
         return imported
 
     def get_alias_count(self) -> int:

@@ -1,25 +1,33 @@
 import asyncio
+import base64
 import hashlib
 import json
 import os
-import time
+import re
 import shutil
-from astrbot.api import AstrBotConfig
+import tempfile
+import time
+import uuid
+from io import BytesIO
+from typing import Optional
+
+import aiohttp
+from PIL import Image as PILImage
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.event.filter import EventMessageType
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core.message.components import Image, Forward
 
 from .database import Database
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.7.0")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.8.0")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.plugin_dir = os.path.dirname(__file__)
+        self.plugin_dir = StarTools.get_data_dir("astrbot_plugin_collectimage")
         self.images_dir = os.path.join(self.plugin_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
         
@@ -36,7 +44,7 @@ class CollectImagePlugin(Star):
         # 异步初始化
         asyncio.create_task(self._init_async())
         
-        logger.info(f"[CollectImage] 插件已加载，图片目录: {self.images_dir}")
+        logger.info(f"[CollectImage] 插件已加载，数据目录: {self.plugin_dir}")
 
     async def _init_async(self):
         """异步初始化 - 启动队列处理器"""
@@ -130,7 +138,8 @@ class CollectImagePlugin(Star):
                 confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
                 
                 character = self._extract_characters(all_results)
-                ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
+                # 更健壮的 ai_detect 类型检查
+                ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
                 
                 self.db.insert_image(
                     file_hash=file_hash,
@@ -157,9 +166,6 @@ class CollectImagePlugin(Star):
         group_id = task['group_id']
         sender_id = task['sender_id']
         
-        import aiohttp
-        import uuid
-        
         logger.info(f"[CollectImage] 处理转发图片: {image_url}")
         
         try:
@@ -173,8 +179,6 @@ class CollectImagePlugin(Star):
                     image_data = await resp.read()
             
             # 先检查哈希（不保存）
-            import tempfile
-            import os as _os
             tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
@@ -202,7 +206,7 @@ class CollectImagePlugin(Star):
                 timestamp = int(time.time())
                 file_ext = ".jpg"
                 image_filename = f"{timestamp}_{group_id}_{sender_id}_{uuid.uuid4().hex[:8]}{file_ext}"
-                image_path = _os.path.join(self.images_dir, image_filename)
+                image_path = os.path.join(self.images_dir, image_filename)
                 
                 shutil.copy(tmp_path, image_path)
                 logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
@@ -218,7 +222,8 @@ class CollectImagePlugin(Star):
                 confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
                 
                 character = self._extract_characters(all_results)
-                ai_detect = "true" if ai_detect == "True" or ai_detect == True else "false"
+                # 更健壮的 ai_detect 类型检查
+                ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
                 
                 self.db.insert_image(
                     file_hash=file_hash,
@@ -236,9 +241,9 @@ class CollectImagePlugin(Star):
                 logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
             finally:
                 # 清理临时文件
-                if tmp_path and _os.path.exists(tmp_path):
-                    try:
-                        _os.remove(tmp_path)
+if tmp_path and os.path.exists(tmp_path):
+    try:
+        os.remove(tmp_path)
                     except:
                         pass
                 
@@ -304,7 +309,6 @@ class CollectImagePlugin(Star):
                 from .web_server import WebServer
                 port = getattr(self.config, 'webui_port', 9192)
                 self.web_server = WebServer(self, port=port)
-                import asyncio
                 asyncio.create_task(self.web_server.start())
             except Exception as e:
                 logger.error(f"[CollectImage] 启动 WebUI 失败: {e}")
@@ -336,7 +340,7 @@ class CollectImagePlugin(Star):
         """检查图片尺寸，长或宽小于min_size返回False"""
         try:
             from PIL import Image
-            with Image.open(file_path) as img:
+            with PILImage.open(file_path) as img:
                 width, height = img.size
                 if width < min_size or height < min_size:
                     return False
@@ -527,6 +531,55 @@ class CollectImagePlugin(Star):
             'img_index': img_index
         })
 
+    async def _llm_generate_with_retry(self, provider_id: str, prompt: str, image_urls: list, max_retries: int = 2) -> str:
+        """带重试逻辑的 LLM 调用"""
+        for attempt in range(max_retries + 1):
+            try:
+                llm_resp = await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=prompt,
+                    image_urls=image_urls,
+                )
+                return llm_resp.completion_text.strip()
+            except Exception as e:
+                if attempt < max_retries:
+                    logger.warning(f"[CollectImage] LLM 调用失败 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
+                    await asyncio.sleep(1)
+                else:
+                    raise
+
+    async def _analyze_image_content(self, provider_id: str, image_url: str) -> dict:
+        """分析图片内容（标签、角色、描述）"""
+        tags_prompt = self._build_tags_prompt()
+        match_prompt = f"""{tags_prompt}
+
+请分析这张图片，从上述标签中选择最匹配的标签。
+要求：
+1. 每个分类最多选择3个最相关的标签
+2. 只选择确实存在的特征，不要猜测
+3. 必须使用中文标签名返回（如"长发"、"金发"、"连衣裙"）
+4. 以JSON格式返回，格式如下：
+{{"gender": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
+如果某个分类没有匹配的标签，返回空列表。"""
+
+        tags_text = await self._llm_generate_with_retry(provider_id, match_prompt, [image_url])
+        try:
+            json_match = re.search(r'\{[^{}]*\}', tags_text, re.DOTALL)
+            matched_tags = json.loads(json_match.group()) if json_match else {}
+        except:
+            matched_tags = {}
+
+        char_prompt = """请识别这张图片中的角色名称（如果有）。
+包括但不限于：动漫角色、游戏角色、原创角色等。
+如果无法确定具体角色名，请回答"未知"。
+只返回角色名，不要其他解释。"""
+        character = await self._llm_generate_with_retry(provider_id, char_prompt, [image_url])
+
+        desc_prompt = "请用一句话描述这张图片的主要内容，不超过30字。"
+        description = await self._llm_generate_with_retry(provider_id, desc_prompt, [image_url])
+
+        return {"tags": matched_tags, "character": character, "description": description}
+
     async def analyze_image(self, image_url: str, event: AstrMessageEvent) -> dict:
         try:
             umo = event.unified_msg_origin
@@ -537,12 +590,7 @@ class CollectImagePlugin(Star):
 无效：照片、漫画，写实图片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。
 请直接回答"有效"或"无效"，，无需其他解释。"""
 
-            llm_resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=filter_prompt,
-                image_urls=[image_url],
-            )
-            filter_result = llm_resp.completion_text.strip()
+            filter_result = await self._llm_generate_with_retry(provider_id, filter_prompt, [image_url])
             logger.info(f"[CollectImage] 筛选结果: {filter_result}")
 
             if "无效" in filter_result:
@@ -554,60 +602,11 @@ class CollectImagePlugin(Star):
                     "description": ""
                 }
 
-            tags_prompt = self._build_tags_prompt()
-            match_prompt = f"""{tags_prompt}
-
-请分析这张图片，从上述标签中选择最匹配的标签。
-要求：
-1. 每个分类最多选择3个最相关的标签
-2. 只选择确实存在的特征，不要猜测
-3. 必须使用中文标签名返回（如"长发"、"金发"、"连衣裙"）
-4. 以JSON格式返回，格式如下：
-{{"gender": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
-如果某个分类没有匹配的标签，返回空列表。"""
-
-            llm_resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=match_prompt,
-                image_urls=[image_url],
-            )
-
-            try:
-                import re
-                json_match = re.search(r'\{[^{}]*\}', llm_resp.completion_text, re.DOTALL)
-                if json_match:
-                    matched_tags = json.loads(json_match.group())
-                else:
-                    matched_tags = {}
-            except:
-                matched_tags = {}
-
-            char_prompt = """请识别这张图片中的角色名称（如果有）。
-包括但不限于：动漫角色、游戏角色、原创角色等。
-如果无法确定具体角色名，请回答"未知"。
-只返回角色名，不要其他解释。"""
-
-            llm_resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=char_prompt,
-                image_urls=[image_url],
-            )
-            character = llm_resp.completion_text.strip()
-
-            desc_prompt = "请用一句话描述这张图片的主要内容，不超过30字。"
-            llm_resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=desc_prompt,
-                image_urls=[image_url],
-            )
-            description = llm_resp.completion_text.strip()
-
+            content = await self._analyze_image_content(provider_id, image_url)
             return {
                 "filter_result": "有效",
                 "reason": "",
-                "tags": matched_tags,
-                "character": character,
-                "description": description
+                **content
             }
 
         except Exception as e:
@@ -622,8 +621,6 @@ class CollectImagePlugin(Star):
 
     async def recognize_character(self, image_url: str, image_base64: str = None) -> dict:
         """调用 AnimeTrace API 识别角色，返回完整结果"""
-        import aiohttp
-        import json as json_module
         try:
             async with aiohttp.ClientSession() as session:
                 form = aiohttp.FormData()
@@ -677,9 +674,6 @@ class CollectImagePlugin(Star):
 
     async def recognize_character_from_file(self, file_path: str) -> dict:
         """从本地文件识别角色（使用 base64 上传），图片过大时自动压缩"""
-        import base64
-        from io import BytesIO
-        from PIL import Image
         try:
             # 从配置获取参数
             max_file_size_mb = getattr(self.config, 'max_file_size_mb', 2)
@@ -692,7 +686,7 @@ class CollectImagePlugin(Star):
             
             if file_size > max_file_size_mb * 1024 * 1024:
                 logger.info(f"[CollectImage] 图片文件过大 ({file_size/1024/1024:.2f}MB > {max_file_size_mb}MB)，进行压缩")
-                with Image.open(file_path) as img:
+                with PILImage.open(file_path) as img:
                     # 获取原始尺寸
                     width, height = img.size
                     
@@ -803,60 +797,12 @@ class CollectImagePlugin(Star):
         try:
             umo = "default"
             provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            image_url = f"file://{image_path}"
 
-            tags_prompt = self._build_tags_prompt()
-            match_prompt = f"""{tags_prompt}
-
-请分析这张图片，从上述标签中选择最匹配的标签。
-要求：
-1. 每个分类最多选择3个最相关的标签
-2. 只选择确实存在的特征，不要猜测
-3. 必须使用中文标签名返回（如"长发"、"金发"、"连衣裙"）
-4. 以JSON格式返回，格式如下：
-{{"gender": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
-如果某个分类没有匹配的标签，返回空列表。"""
-
-            llm_resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=match_prompt,
-                image_urls=[f"file://{image_path}"],
-            )
-
-            try:
-                import re
-                json_match = re.search(r'\{[^{}]*\}', llm_resp.completion_text, re.DOTALL)
-                if json_match:
-                    matched_tags = json.loads(json_match.group())
-                else:
-                    matched_tags = {}
-            except:
-                matched_tags = {}
-
-            char_prompt = """请识别这张图片中的角色名称（如果有）。
-包括但不限于：动漫角色、游戏角色、原创角色等。
-如果无法确定具体角色名，请回答"未知"。
-只返回角色名，不要其他解释。"""
-
-            llm_resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=char_prompt,
-                image_urls=[f"file://{image_path}"],
-            )
-            character = llm_resp.completion_text.strip()
-
-            desc_prompt = "请用一句话描述这张图片的主要内容，不超过30字。"
-            llm_resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=desc_prompt,
-                image_urls=[f"file://{image_path}"],
-            )
-            description = llm_resp.completion_text.strip()
-
+            content = await self._analyze_image_content(provider_id, image_url)
             return {
                 "filter_result": "有效",
-                "tags": matched_tags,
-                "character": character,
-                "description": description
+                **content
             }
 
         except Exception as e:
