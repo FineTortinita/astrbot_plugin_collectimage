@@ -89,6 +89,10 @@ class WebServer:
         self.BLOCK_DURATION = 300  # 5分钟封禁
         self.ATTEMPT_WINDOW = 300  # 5分钟内
         
+        # 线程池执行器 - 用于执行耗时操作
+        import concurrent.futures
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        
         self._import_state = {
             "running": False,
             "total": 0,
@@ -210,7 +214,7 @@ class WebServer:
     async def _auth_middleware(self, request: web.Request, handler):
         if request.path.startswith("/api/auth/"):
             return await handler(request)
-        if request.path.startswith("/web/") or request.path.startswith("/images/") or request.path == "/" or request.path == "/index.html" or request.path == "/favicon.ico":
+        if request.path.startswith("/web/") or request.path == "/" or request.path == "/index.html" or request.path == "/favicon.ico":
             return await handler(request)
         if not await self._check_auth(request):
             return web.json_response({"success": False, "error": "未登录", "code": 401}, status=401)
@@ -578,23 +582,25 @@ class WebServer:
         return self._ok({"status": "ok"})
 
     async def handle_upload_image(self, request: web.Request) -> web.Response:
-        """上传图片文件进行分析"""
+        image_path = None
         try:
+            # Step 1: 接收 - 读取 multipart 数据
             reader = await request.multipart()
             field = await reader.next()
             if field.name != 'file':
                 return self._err("无效的文件字段")
             
+            # Step 2: 校验 - 文件格式
             filename = field.filename
             if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
                 return self._err("不支持的文件格式，请上传 JPG/PNG/GIF/WebP/BMP 图片")
             
+            # Step 3: 流式写入 + hash 计算
             timestamp = int(time.time())
             ext = os.path.splitext(filename)[1] or '.jpg'
             image_filename = f"{timestamp}_webui_upload{ext}"
             image_path = os.path.join(self.plugin.images_dir, image_filename)
             
-            import hashlib
             hasher = hashlib.md5()
             file_size = 0
             
@@ -614,56 +620,53 @@ class WebServer:
             
             file_hash = hasher.hexdigest()
             
+            # Step 4: 去重 - 检查文件是否已存在
             if self.plugin.db.is_hash_exists(file_hash):
                 os.remove(image_path)
                 return self._err("图片已存在（重复上传）")
             
-            try:
-                tags = {}
-                description = ""
-                
-                char_result = await self.plugin.recognize_character_from_file(image_path)
-                all_results = char_result.get("all_results", [])
-                ai_detect = char_result.get("ai_detect", "")
-                character = self.plugin._extract_characters(all_results)
-                
-                person_count = len(all_results)
-                confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
-                confirmed = 1 if (person_count > 0 and confirmed_count == person_count) else 0
-                
-                image_data = {
-                    'file_hash': file_hash,
-                    'file_path': image_path,
-                    'file_name': image_filename,
-                    'group_id': 'webui',
-                    'sender_id': 'manual',
-                    'timestamp': timestamp,
-                    'tags': json.dumps(tags, ensure_ascii=False),
-                    'character': character,
-                    'description': description,
-                    'ai_detect': ai_detect,
-                    'confirmed': confirmed,
-                    'created_at': timestamp
-                }
-                
-                if self.plugin.db.add_image(image_data):
-                    return self._ok({
-                        "message": "图片导入成功",
-                        "image_id": self.plugin.db.get_image_by_hash(file_hash).get('id'),
-                        "file_name": image_filename
-                    })
-                else:
-                    os.remove(image_path)
-                    return self._err("保存到数据库失败")
-            except Exception as e:
-                logger.error(f"[CollectImage] 处理图片失败: {e}")
-                if os.path.exists(image_path):
-                    os.remove(image_path)
-                return self._err(f"处理图片失败: {str(e)}")
+            # Step 5: 分析 - AnimeTrace 角色识别
+            char_result = await self.plugin.recognize_character_from_file(image_path)
+            all_results = char_result.get("all_results", [])
+            ai_detect = char_result.get("ai_detect", "")
+            character = self.plugin._extract_characters(all_results)
+            
+            person_count = len(all_results)
+            confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+            confirmed = 1 if (person_count > 0 and confirmed_count == person_count) else 0
+            
+            # Step 6: 入库 - 保存到数据库
+            image_data = {
+                'file_hash': file_hash,
+                'file_path': image_path,
+                'file_name': image_filename,
+                'group_id': 'webui',
+                'sender_id': 'manual',
+                'timestamp': timestamp,
+                'tags': json.dumps({}, ensure_ascii=False),
+                'character': character,
+                'description': '',
+                'ai_detect': ai_detect,
+                'confirmed': confirmed,
+                'created_at': timestamp
+            }
+            
+            if not self.plugin.db.add_image(image_data):
+                os.remove(image_path)
+                return self._err("保存到数据库失败")
+            
+            image_id = self.plugin.db.get_image_by_hash(file_hash).get('id')
+            return self._ok({
+                "message": "图片导入成功",
+                "image_id": image_id,
+                "file_name": image_filename
+            })
                 
         except Exception as e:
             logger.error(f"[CollectImage] 文件上传失败: {e}")
-            return self._err(f"上传失败: {str(e)}")
+            if image_path and os.path.exists(image_path):
+                os.remove(image_path)
+            return self._err("上传失败")
 
     async def handle_get_config(self, request: web.Request) -> web.Response:
         """获取当前配置"""
@@ -739,7 +742,13 @@ class WebServer:
             if size == "thumb":
                 logger.info(f"[CollectImage] 请求缩略图: {file_path}")
                 thumbnail_size = getattr(self.plugin.config, 'thumbnail_size', DEFAULT_THUMBNAIL_SIZE)
-                thumbnail_data = _generate_thumbnail_cached(str(file_path), thumbnail_size)
+                loop = asyncio.get_event_loop()
+                thumbnail_data = await loop.run_in_executor(
+                    self._executor,
+                    _generate_thumbnail_cached,
+                    str(file_path),
+                    thumbnail_size
+                )
                 
                 if thumbnail_data:
                     return web.Response(
