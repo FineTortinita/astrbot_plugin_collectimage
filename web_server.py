@@ -275,7 +275,6 @@ class WebServer:
                     session, 
                     path="/",
                     httponly=True,
-                    secure=True,
                     max_age=self.SESSION_TIMEOUT,
                     samesite="Lax"
                 )

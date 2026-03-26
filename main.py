@@ -351,11 +351,6 @@ class CollectImagePlugin(Star):
 
     async def _init_aliases_async(self):
         """异步初始化别名库"""
-        alias_count = self.db.get_alias_count()
-        if alias_count > 0:
-            logger.info(f"[CollectImage] 数据库已有 {alias_count} 个别名，跳过导入")
-            return
-        
         # 先检查数据目录，再检查插件代码目录
         aliases_path = os.path.join(self.plugin_dir, "aliases.json")
         if not os.path.exists(aliases_path):
@@ -386,7 +381,13 @@ class CollectImagePlugin(Star):
                                     all_aliases.append((alias_type, original_name, alias))
             
             total = len(all_aliases)
-            logger.info(f"[CollectImage] 开始异步导入 {total} 个别名...")
+            current_count = self.db.get_alias_count()
+            
+            if current_count >= total:
+                logger.info(f"[CollectImage] 数据库已有 {current_count} 个别名，无需导入")
+                return
+            
+            logger.info(f"[CollectImage] 开始异步导入 {total} 个别名（当前已有 {current_count}）...")
             
             imported = 0
             batch_size = 100
@@ -395,14 +396,14 @@ class CollectImagePlugin(Star):
                 batch = all_aliases[i:i + batch_size]
                 for alias_type, original_name, alias in batch:
                     try:
-                        self.db.add_alias(alias_type, original_name, alias)
-                        imported += 1
+                        if self.db.add_alias(alias_type, original_name, alias):
+                            imported += 1
                     except:
                         pass
                 
                 await asyncio.sleep(0.5)
             
-            logger.info(f"[CollectImage] 异步导入完成，共 {imported} 个别名")
+            logger.info(f"[CollectImage] 异步导入完成，新增 {imported} 个别名")
         except Exception as e:
             logger.error(f"[CollectImage] 导入别名失败: {e}")
 
