@@ -257,7 +257,12 @@ class CollectImagePlugin(Star):
             logger.info(f"[CollectImage] 数据库已有 {alias_count} 个别名，跳过导入")
             return
         
+        # 先检查数据目录，再检查插件代码目录
         aliases_path = os.path.join(self.plugin_dir, "aliases.json")
+        if not os.path.exists(aliases_path):
+            plugin_code_dir = os.path.dirname(__file__)
+            aliases_path = os.path.join(plugin_code_dir, "aliases.json")
+        
         if not os.path.exists(aliases_path):
             logger.info("[CollectImage] 别名库文件不存在，跳过导入")
             return
