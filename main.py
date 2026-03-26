@@ -37,12 +37,13 @@ class CollectImagePlugin(Star):
         # 图片处理队列 - 串行处理所有图片
         self._image_queue = asyncio.Queue()
         self._worker_task = None
+        self._init_task = None
         
         self.web_server = None
         self._init_web_server()
         
         # 异步初始化
-        asyncio.create_task(self._init_async())
+        self._init_task = asyncio.create_task(self._init_async())
         
         logger.info(f"[CollectImage] 插件已加载，数据目录: {self.plugin_dir}")
 
@@ -159,12 +160,52 @@ class CollectImagePlugin(Star):
         except Exception as e:
             logger.error(f"[CollectImage] 处理单图失败: {e}")
 
+    def _is_safe_url(self, url: str) -> bool:
+        """验证URL是否安全，防止SSRF攻击"""
+        from urllib.parse import urlparse
+        import ipaddress
+        
+        try:
+            parsed = urlparse(url)
+            
+            # 只允许 http 和 https 协议
+            if parsed.scheme not in ('http', 'https'):
+                return False
+            
+            # 获取主机名
+            hostname = parsed.hostname
+            if not hostname:
+                return False
+            
+            # 检查是否为内网地址
+            try:
+                ip = ipaddress.ip_address(hostname)
+                if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+                    return False
+            except ValueError:
+                # 不是IP地址，是域名
+                # 禁止 localhost 和常见内网域名
+                hostname_lower = hostname.lower()
+                if hostname_lower in ('localhost', 'localhost.localdomain'):
+                    return False
+                if hostname_lower.endswith('.local') or hostname_lower.endswith('.internal'):
+                    return False
+            
+            return True
+        except Exception:
+            return False
+
     async def _do_process_forward_image(self, task):
         """处理转发消息中的图片"""
         image_url = task['image_url']
         event = task['event']
         group_id = task['group_id']
         sender_id = task['sender_id']
+        
+        # SSRF 防护：验证URL安全性
+        if not self._is_safe_url(image_url):
+            logger.warning(f"[CollectImage] 不安全的URL，跳过处理: {image_url}")
+            return
         
         logger.info(f"[CollectImage] 处理转发图片: {image_url}")
         
@@ -798,6 +839,12 @@ class CollectImagePlugin(Star):
             yield event.image_result(img["file_path"])
 
     async def terminate(self):
+        if self._init_task and not self._init_task.done():
+            self._init_task.cancel()
+            try:
+                await self._init_task
+            except asyncio.CancelledError:
+                pass
         if self._worker_task and not self._worker_task.done():
             self._worker_task.cancel()
             try:

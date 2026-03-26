@@ -270,15 +270,16 @@ class Database:
             conn.close()
 
     def delete_image(self, image_id: int) -> bool:
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
             conn.commit()
-            conn.close()
             return True
         except Exception:
             return False
+        finally:
+            conn.close()
 
     def cleanup_missing_files(self) -> int:
         """清理数据库中有记录但文件不存在的条目，返回清理数量"""
@@ -476,8 +477,8 @@ class Database:
 
     def add_alias(self, alias_type: str, original_name: str, alias: str) -> bool:
         """添加别名"""
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT OR IGNORE INTO character_aliases (alias_type, original_name, alias) VALUES (?, ?, ?)",
@@ -485,10 +486,11 @@ class Database:
             )
             conn.commit()
             affected = cursor.rowcount
-            conn.close()
             return affected > 0
         except Exception:
             return False
+        finally:
+            conn.close()
 
     def get_all_aliases(self) -> list:
         """获取所有别名"""
@@ -513,16 +515,17 @@ class Database:
 
     def delete_alias(self, alias_id: int) -> bool:
         """删除别名"""
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM character_aliases WHERE id = ?", (alias_id,))
             conn.commit()
             affected = cursor.rowcount
-            conn.close()
             return affected > 0
         except Exception:
             return False
+        finally:
+            conn.close()
 
     def search_alias(self, keyword: str) -> list:
         """搜索别名"""

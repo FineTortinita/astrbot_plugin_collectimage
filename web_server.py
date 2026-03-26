@@ -170,10 +170,16 @@ class WebServer:
         return True
 
     def _get_client_ip(self, request: web.Request) -> str:
+        # 优先使用直接连接的IP，避免信任伪造的X-Forwarded-For
+        direct_ip = request.remote or "unknown"
+        
+        # 如果需要支持反向代理，应配置可信代理列表
+        # 这里简化处理：只有当请求来自本地时才信任X-Forwarded-For
         forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
+        if forwarded_for and direct_ip in ('127.0.0.1', '::1', 'localhost'):
             return forwarded_for.split(",")[0].strip()
-        return request.remote or "unknown"
+        
+        return direct_ip
 
     def _is_ip_blocked(self, ip: str) -> bool:
         if ip not in self._blocked_ips:
@@ -205,9 +211,19 @@ class WebServer:
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler):
         response = await handler(request)
-        response.headers['Access-Control-Allow-Origin'] = '*'
+        origin = request.headers.get('Origin', '')
+        
+        # 只允许同源请求，或配置的可信来源
+        allowed_origins = getattr(self.plugin.config, 'cors_origins', [])
+        if origin and (origin in allowed_origins or not allowed_origins):
+            response.headers['Access-Control-Allow-Origin'] = origin
+        elif not origin:
+            # 同源请求没有Origin头
+            pass
+        
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        response.headers['Access-Control-Allow-Credentials'] = 'false'
         return response
 
     @web.middleware
@@ -258,7 +274,8 @@ class WebServer:
                     self._cookie_name, 
                     session, 
                     path="/",
-                    httponly=True, 
+                    httponly=True,
+                    secure=True,
                     max_age=self.SESSION_TIMEOUT,
                     samesite="Lax"
                 )
@@ -718,8 +735,13 @@ class WebServer:
     async def handle_web_static(self, request: web.Request) -> web.Response:
         path = request.match_info["path"]
         file_path = (self.static_dir / path).resolve()
-        if not str(file_path).startswith(str(self.static_dir.resolve())):
+        static_dir_resolved = self.static_dir.resolve()
+        
+        try:
+            file_path.relative_to(static_dir_resolved)
+        except ValueError:
             return web.Response(text="Forbidden", status=403)
+        
         if file_path.exists() and file_path.is_file():
             return web.FileResponse(file_path)
         return web.Response(text="Not found", status=404)
@@ -730,7 +752,9 @@ class WebServer:
             images_dir = Path(self.images_dir).resolve()
             file_path = (images_dir / path).resolve()
             
-            if not str(file_path).startswith(str(images_dir)):
+            try:
+                file_path.relative_to(images_dir)
+            except ValueError:
                 return web.Response(text="Forbidden", status=403)
             
             if not file_path.exists() or not file_path.is_file():
@@ -960,6 +984,9 @@ class WebServer:
         if self.runner:
             await self.runner.cleanup()
         self._started = False
+        # 关闭线程池执行器
+        if hasattr(self, '_executor') and self._executor:
+            self._executor.shutdown(wait=False)
         logger.info("[CollectImage] WebUI 已停止")
 
 
