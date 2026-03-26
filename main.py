@@ -241,9 +241,9 @@ class CollectImagePlugin(Star):
                 logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
             finally:
                 # 清理临时文件
-if tmp_path and os.path.exists(tmp_path):
-    try:
-        os.remove(tmp_path)
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
                     except:
                         pass
                 
