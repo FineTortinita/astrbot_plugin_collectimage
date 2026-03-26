@@ -314,7 +314,8 @@ class CollectImagePlugin(Star):
                 logger.error(f"[CollectImage] 启动 WebUI 失败: {e}")
 
     def _load_tags_library(self) -> dict:
-        tags_path = os.path.join(self.plugin_dir, "tags_library.json")
+        plugin_code_dir = os.path.dirname(__file__)
+        tags_path = os.path.join(plugin_code_dir, "tags_library.json")
         try:
             with open(tags_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
