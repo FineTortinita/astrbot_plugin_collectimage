@@ -28,6 +28,10 @@ class CollectImagePlugin(Star):
         super().__init__(context)
         self.config = config
         self.plugin_dir = str(StarTools.get_data_dir("astrbot_plugin_collectimage"))
+        
+        # 迁移旧数据
+        self._migrate_old_data()
+        
         os.makedirs(self.plugin_dir, exist_ok=True)
         self.images_dir = os.path.join(self.plugin_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
@@ -47,6 +51,52 @@ class CollectImagePlugin(Star):
         self._init_task = asyncio.create_task(self._init_async())
         
         logger.info(f"[CollectImage] 插件已加载，数据目录: {self.plugin_dir}")
+    
+    def _migrate_old_data(self):
+        """迁移旧数据到新目录"""
+        import shutil
+        old_data_dir = os.path.join(os.path.dirname(__file__))
+        
+        # 检查旧目录是否存在数据库或图片目录
+        old_db_path = os.path.join(old_data_dir, "collectimage.db")
+        old_images_dir = os.path.join(old_data_dir, "images")
+        old_aliases_path = os.path.join(old_data_dir, "aliases.json")
+        
+        new_db_path = os.path.join(self.plugin_dir, "collectimage.db")
+        new_images_dir = os.path.join(self.plugin_dir, "images")
+        new_aliases_path = os.path.join(self.plugin_dir, "aliases.json")
+        
+        migrated = False
+        
+        # 迁移数据库
+        if os.path.exists(old_db_path) and not os.path.exists(new_db_path):
+            try:
+                shutil.copy2(old_db_path, new_db_path)
+                logger.info(f"[CollectImage] 已迁移数据库: {old_db_path} -> {new_db_path}")
+                migrated = True
+            except Exception as e:
+                logger.error(f"[CollectImage] 迁移数据库失败: {e}")
+        
+        # 迁移图片目录
+        if os.path.exists(old_images_dir) and not os.path.exists(new_images_dir):
+            try:
+                shutil.copytree(old_images_dir, new_images_dir)
+                logger.info(f"[CollectImage] 已迁移图片目录: {old_images_dir} -> {new_images_dir}")
+                migrated = True
+            except Exception as e:
+                logger.error(f"[CollectImage] 迁移图片目录失败: {e}")
+        
+        # 迁移别名文件
+        if os.path.exists(old_aliases_path) and not os.path.exists(new_aliases_path):
+            try:
+                shutil.copy2(old_aliases_path, new_aliases_path)
+                logger.info(f"[CollectImage] 已迁移别名文件: {old_aliases_path} -> {new_aliases_path}")
+                migrated = True
+            except Exception as e:
+                logger.error(f"[CollectImage] 迁移别名文件失败: {e}")
+        
+        if migrated:
+            logger.info("[CollectImage] 数据迁移完成")
 
     async def _init_async(self):
         """异步初始化 - 启动队列处理器"""
