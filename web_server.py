@@ -278,6 +278,13 @@ class WebServer:
         response.del_cookie(self._cookie_name, path="/")
         return response
 
+    def _safe_int(self, value, default=0):
+        """安全地将值转换为整数"""
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
     async def handle_list_images(self, request: web.Request) -> web.Response:
         tag = request.query.get("tag")
         character = request.query.get("character")
@@ -285,8 +292,8 @@ class WebServer:
         group_id = request.query.get("group_id")
         confirmed = request.query.get("confirmed")
         max_limit = getattr(self.plugin.config, 'max_api_images', 50)
-        limit = int(request.query.get("limit", max_limit))
-        offset = int(request.query.get("offset", 0))
+        limit = self._safe_int(request.query.get("limit"), max_limit)
+        offset = self._safe_int(request.query.get("offset"), 0)
         
         # 限制最大数量
         if limit > max_limit:
@@ -294,7 +301,7 @@ class WebServer:
         
         confirmed_val = None
         if confirmed is not None:
-            confirmed_val = int(confirmed)
+            confirmed_val = self._safe_int(confirmed)
 
         images = self.plugin.db.search_images(
             tag=tag,
@@ -326,7 +333,7 @@ class WebServer:
         """搜索图片（支持别名匹配，与 /moe 命令相同的搜索逻辑）"""
         keyword = request.query.get("keyword", "")
         max_limit = getattr(self.plugin.config, 'max_api_images', 50)
-        limit = int(request.query.get("limit", max_limit))
+        limit = self._safe_int(request.query.get("limit"), max_limit)
         confirmed = request.query.get("confirmed")
         
         if not keyword:
@@ -559,7 +566,7 @@ class WebServer:
 
     async def handle_get_stats(self, request: web.Request) -> web.Response:
         try:
-            days = int(request.query.get("days", 7))
+            days = self._safe_int(request.query.get("days"), 7)
             if days not in [7, 15, 30]:
                 days = 7
             stats = self.plugin.db.get_stats(days)
@@ -756,8 +763,8 @@ class WebServer:
         
         alias_type = request.query.get("type")
         search = request.query.get("search")
-        page = int(request.query.get("page", 1))
-        page_size = int(request.query.get("page_size", 25))
+        page = self._safe_int(request.query.get("page"), 1)
+        page_size = self._safe_int(request.query.get("page_size"), 25)
         
         if page < 1:
             page = 1

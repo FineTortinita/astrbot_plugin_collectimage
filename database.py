@@ -39,12 +39,12 @@ class Database:
         """)
         try:
             cursor.execute("ALTER TABLE images ADD COLUMN ai_detect TEXT")
-        except:
-            pass
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         try:
             cursor.execute("ALTER TABLE images ADD COLUMN confirmed INTEGER DEFAULT 0")
-        except:
-            pass
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         
         self._init_alias_db(conn, cursor)
         
@@ -209,8 +209,8 @@ class Database:
         character: Optional[str] = None,
         description: Optional[str] = None,
     ) -> bool:
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             updates = []
             params = []
@@ -231,40 +231,43 @@ class Database:
                 params,
             )
             conn.commit()
-            conn.close()
             return True
         except Exception:
             return False
+        finally:
+            conn.close()
 
     def update_character(self, image_id: int, character: str) -> bool:
         """只更新 character 字段"""
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE images SET character = ? WHERE id = ?",
                 (character, image_id),
             )
             conn.commit()
-            conn.close()
             return True
         except Exception:
             return False
+        finally:
+            conn.close()
 
     def update_confirmed(self, image_id: int, confirmed: int) -> bool:
         """更新确认状态"""
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE images SET confirmed = ? WHERE id = ?",
                 (confirmed, image_id),
             )
             conn.commit()
-            conn.close()
             return True
         except Exception:
             return False
+        finally:
+            conn.close()
 
     def delete_image(self, image_id: int) -> bool:
         try:
