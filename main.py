@@ -28,6 +28,7 @@ class CollectImagePlugin(Star):
         super().__init__(context)
         self.config = config
         self.plugin_dir = StarTools.get_data_dir("astrbot_plugin_collectimage")
+        os.makedirs(self.plugin_dir, exist_ok=True)
         self.images_dir = os.path.join(self.plugin_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
         
