@@ -224,7 +224,7 @@ class WebServer:
             raise
         except Exception as e:
             logger.error(f"[CollectImage WebUI] 请求错误: {e}")
-            return self._err(str(e))
+            return self._err("服务器内部错误")
 
     async def handle_login(self, request: web.Request) -> web.Response:
         try:
@@ -605,20 +605,6 @@ class WebServer:
                 os.remove(image_path)
                 return self._err("图片已存在（重复上传）")
             
-            from PIL import Image
-            file_hash = hashlib.md5(file_data).hexdigest()
-            
-            if self.plugin.db.is_hash_exists(file_hash):
-                return self._err("图片已存在（重复上传）")
-            
-            timestamp = int(time.time())
-            ext = os.path.splitext(filename)[1] or '.jpg'
-            image_filename = f"{timestamp}_webui_upload{ext}"
-            image_path = os.path.join(self.plugin.images_dir, image_filename)
-            
-            with open(image_path, 'wb') as f:
-                f.write(file_data)
-            
             try:
                 tags = {}
                 description = ""
@@ -715,7 +701,9 @@ class WebServer:
 
     async def handle_web_static(self, request: web.Request) -> web.Response:
         path = request.match_info["path"]
-        file_path = self.static_dir / path
+        file_path = (self.static_dir / path).resolve()
+        if not str(file_path).startswith(str(self.static_dir.resolve())):
+            return web.Response(text="Forbidden", status=403)
         if file_path.exists() and file_path.is_file():
             return web.FileResponse(file_path)
         return web.Response(text="Not found", status=404)
@@ -723,7 +711,11 @@ class WebServer:
     async def handle_images_static(self, request: web.Request) -> web.Response:
         try:
             path = request.match_info["path"]
-            file_path = Path(self.images_dir) / path
+            images_dir = Path(self.images_dir).resolve()
+            file_path = (images_dir / path).resolve()
+            
+            if not str(file_path).startswith(str(images_dir)):
+                return web.Response(text="Forbidden", status=403)
             
             if not file_path.exists() or not file_path.is_file():
                 logger.warning(f"[CollectImage] 图片不存在: {file_path}")

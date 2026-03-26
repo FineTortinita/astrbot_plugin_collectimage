@@ -701,7 +701,7 @@ class CollectImagePlugin(Star):
                         scale = max_dimension / max(width, height)
                         new_width = int(width * scale)
                         new_height = int(height * scale)
-                        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        img = img.resize((new_width, new_height), PILImage.Resampling.LANCZOS)
                         logger.info(f"[CollectImage] 缩放图片: {width}x{height} -> {new_width}x{new_height}")
                     
                     # 转换为RGB（如果是RGBA）
@@ -766,7 +766,11 @@ class CollectImagePlugin(Star):
             parts = args.strip().split()
             if parts:
                 kw = parts[0]
-                count = int(parts[1]) if len(parts) > 1 else 1
+                if len(parts) > 1:
+                    try:
+                        count = int(parts[1])
+                    except ValueError:
+                        count = 1
         
         if not kw or kw == "stats":
             total = self.db.count_images()
