@@ -331,7 +331,7 @@ class WebServer:
             confirmed=confirmed_val,
             limit=limit,
             offset=offset,
-            random=True,
+            random=False,
         )
         total = self.plugin.db.count_images(
             tag=tag,
@@ -350,42 +350,34 @@ class WebServer:
         return self._ok({"images": images, "total": total})
 
     async def handle_search_images(self, request: web.Request) -> web.Response:
-        """搜索图片（支持别名匹配，与 /moe 命令相同的搜索逻辑）"""
         keyword = request.query.get("keyword", "")
         max_limit = getattr(self.plugin.config, 'max_api_images', 50)
         limit = self._safe_int(request.query.get("limit"), max_limit)
+        offset = self._safe_int(request.query.get("offset"), 0)
         confirmed = request.query.get("confirmed")
-        
+
         if not keyword:
             return self._err("关键词不能为空")
-        
-        # 限制最大数量
+
         if limit > max_limit:
             limit = max_limit
-        
+
         confirmed_val = None
         if confirmed is not None:
-            confirmed_val = int(confirmed)
-        
-        # 优先搜索角色（含别名匹配）
-        images = self.plugin.db.search_character_random_with_alias(keyword=keyword, limit=limit)
-        
-        # 角色没找到再搜索标签和描述（含别名匹配）
-        if not images:
-            images = self.plugin.db.search_all_random_with_alias(keyword=keyword, limit=limit)
-        
-        # 如果有确认状态筛选，在结果中过滤
-        if confirmed_val is not None:
-            images = [img for img in images if img.get("confirmed") == confirmed_val]
-        
+            confirmed_val = self._safe_int(confirmed)
+
+        images, total = self.plugin.db.search_with_alias(
+            keyword=keyword, limit=limit, offset=offset, confirmed=confirmed_val
+        )
+
         for img in images:
             if img.get("tags"):
                 try:
                     img["tags"] = json.loads(img["tags"])
                 except:
                     pass
-        
-        return self._ok({"images": images, "total": len(images), "keyword": keyword})
+
+        return self._ok({"images": images, "total": total, "keyword": keyword})
 
     async def handle_get_image(self, request: web.Request) -> web.Response:
         image_id = int(request.match_info["image_id"])

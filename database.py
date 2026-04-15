@@ -771,5 +771,26 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
+    def search_with_alias(self, keyword: str, limit: int = 50, offset: int = 0,
+                          confirmed: int = None) -> tuple:
+        conditions, params = self._build_search_conditions(keyword)
+        where_clause = " OR ".join(conditions)
+        if confirmed is not None:
+            where_clause = f"({where_clause}) AND confirmed = ?"
+            params.append(confirmed)
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM images WHERE {where_clause}", params)
+            total = cursor.fetchone()[0]
+            query_params = params + [limit, offset]
+            cursor.execute(
+                f"SELECT * FROM images WHERE {where_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                query_params
+            )
+            return [dict(row) for row in cursor.fetchall()], total
+        finally:
+            conn.close()
+
     def close(self):
         pass
