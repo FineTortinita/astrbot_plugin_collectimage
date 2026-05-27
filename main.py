@@ -43,6 +43,7 @@ class CollectImagePlugin(Star):
         self._image_queue = asyncio.Queue()
         self._worker_task = None
         self._init_task = None
+        self._queued_image_ids: set = set()
         
         self.web_server = None
         self._init_web_server()
@@ -111,6 +112,9 @@ class CollectImagePlugin(Star):
         
         # 初始化别名
         await self._init_aliases_async()
+        
+        # 为存量图片补算 phash
+        await self._backfill_phashes()
     
     async def _image_worker(self):
         """图片处理 worker - 串行处理队列中的图片"""
@@ -133,14 +137,17 @@ class CollectImagePlugin(Star):
         """处理队列中的图片"""
         task_type = task.get('type')
         
-        if task_type == 'single':
-            # 普通图片处理
-            await self._do_process_single_image(task)
-        elif task_type == 'forward':
-            # 转发消息图片处理
-            await self._do_process_forward_image(task)
-        else:
-            logger.warning(f"[CollectImage] 未知任务类型: {task_type}")
+        try:
+            if task_type == 'single':
+                await self._do_process_single_image(task)
+            elif task_type == 'forward':
+                await self._do_process_forward_image(task)
+            else:
+                logger.warning(f"[CollectImage] 未知任务类型: {task_type}")
+        finally:
+            image_id = task.get('image_id', '')
+            if image_id:
+                self._queued_image_ids.discard(image_id)
     
     async def _do_process_single_image(self, task):
         """处理普通图片"""
@@ -164,8 +171,15 @@ class CollectImagePlugin(Star):
             file_hash = self._calculate_hash(local_path)
             
             if self.db.is_hash_exists(file_hash):
-                logger.info("[CollectImage] 图片已存在，跳过")
+                logger.info("[CollectImage] 图片已存在 (MD5)，跳过")
                 return
+            
+            phash = self._calculate_phash(local_path)
+            if phash:
+                similar = self.db.find_similar_phash(phash)
+                if similar:
+                    logger.info(f"[CollectImage] 发现相似图片 (phash), 已有图片 id={similar['id']}，跳过")
+                    return
             
             image_url = msg.url or msg.file
             
@@ -211,6 +225,7 @@ class CollectImagePlugin(Star):
                     description=result.get("description"),
                     ai_detect=ai_detect,
                     confirmed=confirmed,
+                    phash=phash,
                 )
                 logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
 
@@ -287,12 +302,19 @@ class CollectImagePlugin(Star):
                 file_hash = self._calculate_hash(tmp_path)
                 
                 if self.db.is_hash_exists(file_hash):
-                    logger.info("[CollectImage] 转发图片已存在，跳过")
+                    logger.info("[CollectImage] 转发图片已存在 (MD5)，跳过")
                     return
                 
                 if not self._check_image_size(tmp_path):
                     logger.info("[CollectImage] 转发图片尺寸过小，跳过")
                     return
+                
+                phash = self._calculate_phash(tmp_path)
+                if phash:
+                    similar = self.db.find_similar_phash(phash)
+                    if similar:
+                        logger.info(f"[CollectImage] 转发图片发现相似图片 (phash), 已有图片 id={similar['id']}，跳过")
+                        return
                 
                 # VLM 分析
                 result = await self.analyze_image(image_url, event)
@@ -336,6 +358,7 @@ class CollectImagePlugin(Star):
                     description=result.get("description"),
                     ai_detect=ai_detect,
                     confirmed=confirmed,
+                    phash=phash,
                 )
                 logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
             finally:
@@ -407,6 +430,25 @@ class CollectImagePlugin(Star):
         except Exception as e:
             logger.error(f"[CollectImage] 导入别名失败: {e}")
 
+    async def _backfill_phashes(self):
+        batch_size = 50
+        total_updated = 0
+        while True:
+            images = self.db.get_images_without_phash(limit=batch_size)
+            if not images:
+                break
+            for img in images:
+                file_path = img["file_path"]
+                if not os.path.exists(file_path):
+                    continue
+                phash = self._calculate_phash(file_path)
+                if phash:
+                    self.db.update_phash(img["id"], phash)
+                    total_updated += 1
+            await asyncio.sleep(0.1)
+        if total_updated > 0:
+            logger.info(f"[CollectImage] phash 补算完成，更新 {total_updated} 张图片")
+
     def _init_web_server(self):
         webui_enabled = getattr(self.config, 'webui_enabled', False)
         if webui_enabled:
@@ -441,6 +483,25 @@ class CollectImagePlugin(Star):
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
+
+    def _calculate_phash(self, file_path: str, hash_size: int = 8) -> str:
+        """计算感知哈希 (dHash): 基于相邻像素差异，对压缩/缩放/重编码鲁棒"""
+        try:
+            with PILImage.open(file_path) as img:
+                img = img.convert('L').resize(
+                    (hash_size + 1, hash_size), PILImage.Resampling.LANCZOS
+                )
+                pixels = list(img.getdata())
+                hash_bits = []
+                for row in range(hash_size):
+                    offset = row * (hash_size + 1)
+                    for col in range(hash_size):
+                        hash_bits.append(1 if pixels[offset + col] > pixels[offset + col + 1] else 0)
+                hash_int = int(''.join(str(b) for b in hash_bits), 2)
+                return f'{hash_int:016x}'
+        except Exception as e:
+            logger.warning(f"[CollectImage] 计算感知哈希失败: {file_path}, {e}")
+            return ""
 
     def _check_image_size(self, file_path: str, min_size: int = 600) -> bool:
         """检查图片尺寸，长或宽小于min_size返回False"""
@@ -617,24 +678,35 @@ class CollectImagePlugin(Star):
             logger.error(f"[CollectImage] 处理转发消息失败: {e}")
 
     async def _process_image_by_url(self, image_url: str, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
-        """将转发消息中的图片加入处理队列"""
+        if image_url and image_url in self._queued_image_ids:
+            logger.info("[CollectImage] 转发图片已在队列中，跳过")
+            return
+        if image_url:
+            self._queued_image_ids.add(image_url)
         await self._image_queue.put({
             'type': 'forward',
             'image_url': image_url,
             'event': event,
             'group_id': group_id,
-            'sender_id': sender_id
+            'sender_id': sender_id,
+            'image_id': image_url,
         })
 
     async def _process_single_image(self, msg: Image, event: AstrMessageEvent, group_id: str, sender_id: str, img_index: int = 0) -> None:
-        """将单张图片加入处理队列"""
+        image_id = msg.url or msg.file or ""
+        if image_id and image_id in self._queued_image_ids:
+            logger.info("[CollectImage] 图片已在队列中，跳过")
+            return
+        if image_id:
+            self._queued_image_ids.add(image_id)
         await self._image_queue.put({
             'type': 'single',
             'msg': msg,
             'event': event,
             'group_id': group_id,
             'sender_id': sender_id,
-            'img_index': img_index
+            'img_index': img_index,
+            'image_id': image_id,
         })
 
     async def _llm_generate_with_retry(self, provider_id: str, prompt: str, image_urls: list, max_retries: int = 2) -> str:

@@ -45,6 +45,12 @@ class Database:
             cursor.execute("ALTER TABLE images ADD COLUMN confirmed INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        try:
+            cursor.execute("ALTER TABLE images ADD COLUMN phash TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash)")
         
         self._init_alias_db(conn, cursor)
         
@@ -81,6 +87,53 @@ class Database:
         conn.close()
         return result
 
+    def get_all_phashes(self) -> list:
+        """获取所有非空的 phash 及对应 id"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, phash FROM images WHERE phash IS NOT NULL AND phash != ''")
+        rows = cursor.fetchall()
+        conn.close()
+        return [(row[0], row[1]) for row in rows]
+
+    def find_similar_phash(self, phash: str, threshold: int = 10) -> Optional[dict]:
+        """查找与给定 phash 汉明距离 <= threshold 的图片，返回第一个匹配"""
+        if not phash:
+            return None
+        all_phashes = self.get_all_phashes()
+        phash_int = int(phash, 16)
+        for img_id, existing_phash in all_phashes:
+            existing_int = int(existing_phash, 16)
+            distance = bin(phash_int ^ existing_int).count('1')
+            if distance <= threshold:
+                return self.get_image_by_id(img_id)
+        return None
+
+    def update_phash(self, image_id: int, phash: str) -> bool:
+        """更新指定图片的 phash"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE images SET phash = ? WHERE id = ?", (phash, image_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def get_images_without_phash(self, limit: int = 100) -> list:
+        """获取没有 phash 的图片记录"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, file_path FROM images WHERE phash IS NULL OR phash = '' LIMIT ?",
+            (limit,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id": row[0], "file_path": row[1]} for row in rows]
+
     def add_image(self, image_data: dict) -> bool:
         """从字典添加图片记录"""
         conn = self._get_connection()
@@ -88,8 +141,8 @@ class Database:
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO images 
-                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect, confirmed) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect, confirmed, phash) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     image_data.get('file_hash'),
                     image_data.get('file_path'),
@@ -102,6 +155,7 @@ class Database:
                     image_data.get('description'),
                     image_data.get('ai_detect'),
                     image_data.get('confirmed', 0),
+                    image_data.get('phash'),
                 ),
             )
             conn.commit()
@@ -124,14 +178,15 @@ class Database:
         description: Optional[str] = None,
         ai_detect: Optional[str] = None,
         confirmed: int = 0,
+        phash: Optional[str] = None,
     ) -> bool:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO images 
-                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect, confirmed) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (file_hash, file_path, file_name, group_id, sender_id, timestamp, tags, character, description, ai_detect, confirmed, phash) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     file_hash,
                     file_path,
@@ -144,6 +199,7 @@ class Database:
                     description,
                     ai_detect,
                     confirmed,
+                    phash,
                 ),
             )
             conn.commit()

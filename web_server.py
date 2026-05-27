@@ -633,6 +633,13 @@ class WebServer:
                 os.remove(image_path)
                 return self._err("图片已存在（重复上传）")
             
+            phash = self.plugin._calculate_phash(image_path)
+            if phash:
+                similar = self.plugin.db.find_similar_phash(phash)
+                if similar:
+                    os.remove(image_path)
+                    return self._err(f"发现相似图片（感知哈希匹配，已有图片 id={similar['id']}）")
+            
             # Step 5: 分析 - AnimeTrace 角色识别
             char_result = await self.plugin.recognize_character_from_file(image_path)
             all_results = char_result.get("all_results", [])
@@ -656,7 +663,8 @@ class WebServer:
                 'description': '',
                 'ai_detect': ai_detect,
                 'confirmed': confirmed,
-                'created_at': timestamp
+                'created_at': timestamp,
+                'phash': phash,
             }
             
             if not self.plugin.db.add_image(image_data):
