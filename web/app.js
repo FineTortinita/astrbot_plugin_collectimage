@@ -6,6 +6,7 @@ let totalImages = 0;
 let currentImageId = null;
 let currentFilter = 'all';
 let isSearchMode = false;
+let currentSearchKeyword = '';
 let detailModal = null;
 let loginPage, mainPage, loginForm, loginError, imageGrid, imageCount;
 
@@ -152,6 +153,7 @@ function bindEventListeners() {
             if (keywordInput) keywordInput.value = '';
             currentPage = 0;
             isSearchMode = false;
+            currentSearchKeyword = '';
             loadImages();
         });
     }
@@ -179,7 +181,8 @@ function bindEventListeners() {
             item.classList.add('active');
             
             currentFilter = item.dataset.filter;
-            isSearchMode = false; // 退出搜索模式
+            isSearchMode = false;
+            currentSearchKeyword = '';
             
             // 隐藏所有 tab 内容
             document.querySelectorAll('.tab-content').forEach(content => {
@@ -887,8 +890,16 @@ async function loadImages() {
     params.append('limit', pageSize);
     params.append('offset', currentPage * pageSize);
 
+    let url;
+    if (isSearchMode && currentSearchKeyword) {
+        params.append('keyword', currentSearchKeyword);
+        url = `${API_BASE}/api/images/search?${params}`;
+    } else {
+        url = `${API_BASE}/api/images?${params}`;
+    }
+
     try {
-        const response = await fetch(`${API_BASE}/api/images?${params}`);
+        const response = await fetch(url);
         const data = await response.json();
         
         if (data.success) {
@@ -903,32 +914,14 @@ async function loadImages() {
 
 // 搜索图片（支持别名匹配）
 async function searchImagesWithAlias(keyword) {
-    const params = new URLSearchParams();
-    params.append('keyword', keyword);
-    params.append('limit', 50);
-    
-    // 侧边栏筛选
-    if (currentFilter === 'confirmed') {
-        params.append('confirmed', '1');
-    } else if (currentFilter === 'unconfirmed') {
-        params.append('confirmed', '0');
-    }
-
-    try {
-        const response = await fetch(`${API_BASE}/api/images/search?${params}`);
-        const data = await response.json();
-        
-        if (data.success) {
-            isSearchMode = true;
-            totalImages = data.total;
-            currentPage = 0;
-            renderImages(data.images);
-            updatePagination();
-            showToast(`找到 ${data.total} 张相关图片`, 'info');
-        }
-    } catch (e) {
-        console.error('搜索图片失败:', e);
-        showToast('搜索失败', 'error');
+    currentSearchKeyword = keyword;
+    isSearchMode = true;
+    currentPage = 0;
+    await loadImages();
+    if (totalImages > 0) {
+        showToast(`找到 ${totalImages} 张相关图片`, 'info');
+    } else {
+        showToast('未找到相关图片', 'warning');
     }
 }
 
