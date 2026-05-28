@@ -84,12 +84,16 @@
         .modal-overlay {
             background: rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(4px);
-            z-index: 40;
         }
         
         .modal-content {
             animation: modalSlideIn 0.3s ease;
-            z-index: 50;
+        }
+        
+        @media (max-width: 767px) {
+            .sidebar-item.active {
+                border-left: none;
+            }
         }
         
         @keyframes modalSlideIn {
@@ -156,70 +160,72 @@
         <div id="main-page" class="hidden min-h-screen">
             <!-- Header -->
             <header class="glass-card shadow-sm sticky top-0 z-40">
-                <div class="max-w-7xl mx-auto px-4 py-4">
+                <div class="mx-auto px-4 lg:px-8 py-3 md:py-4">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 bg-gradient-to-br from-purple-400 to-pink-400 rounded-xl flex items-center justify-center">
+                            <div class="w-10 h-10 bg-gradient-to-br from-purple-400 to-pink-400 rounded-xl flex items-center justify-center flex-shrink-0">
                                 <i data-lucide="image" class="w-5 h-5 text-white"></i>
                             </div>
-                            <h1 class="text-xl font-bold text-gray-800">图片收集管理器</h1>
+                            <h1 class="text-lg md:text-xl font-bold text-gray-800 truncate">图片收集管理器</h1>
                         </div>
-                        <div class="flex items-center space-x-4">
-                            <span id="image-count" class="text-gray-600">共 0 张图片</span>
-                            <button id="logout-btn" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition">
-                                <i data-lucide="log-out" class="w-4 h-4 inline mr-1"></i>退出
+                        <div class="flex items-center space-x-2 md:space-x-4 flex-shrink-0">
+                            <span id="image-count" class="text-gray-600 text-sm hidden sm:inline">共 0 张图片</span>
+                            <button id="logout-btn" class="px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition text-sm">
+                                <i data-lucide="log-out" class="w-4 h-4 inline mr-1"></i><span class="hidden sm:inline">退出</span>
                             </button>
                         </div>
                     </div>
                 </div>
             </header>
 
-            <div class="max-w-7xl mx-auto px-4 py-6">
+            <div class="mx-auto px-4 lg:px-8 py-4 md:py-6">
                 <!-- 顶部导航 -->
-                <div class="flex gap-2 mb-6">
-                    <button class="tab-btn active px-4 py-2 rounded-lg bg-purple-100 text-purple-700 font-medium" data-tab="images">
+                <div class="flex gap-2 mb-4 md:mb-6 overflow-x-auto">
+                    <button class="tab-btn active px-3 md:px-4 py-2 rounded-lg bg-purple-100 text-purple-700 font-medium whitespace-nowrap text-sm md:text-base" data-tab="images">
                         <i data-lucide="images" class="w-4 h-4 inline mr-1"></i>图片管理
                     </button>
-                    <button class="tab-btn px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600" data-tab="aliases">
+                    <button class="tab-btn px-3 md:px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600 whitespace-nowrap text-sm md:text-base" data-tab="aliases">
                         <i data-lucide="tags" class="w-4 h-4 inline mr-1"></i>别名管理
                     </button>
-                    <button class="tab-btn px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600" data-tab="config">
+                    <button class="tab-btn px-3 md:px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600 whitespace-nowrap text-sm md:text-base" data-tab="config">
                         <i data-lucide="settings" class="w-4 h-4 inline mr-1"></i>插件配置
                     </button>
                 </div>
 
-                <div class="flex gap-6">
-                    <!-- 侧边栏 (仅图片管理时显示) -->
-                    <aside id="sidebar" class="w-48 flex-shrink-0">
-                        <div class="glass-card rounded-xl p-4 space-y-2 sticky top-24">
-                            <button class="sidebar-item active w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="all">
-                                <i data-lucide="images" class="w-5 h-5 text-purple-500"></i>
-                                <span>全部图片</span>
-                            </button>
-                            <button class="sidebar-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="confirmed">
-                                <i data-lucide="check-circle" class="w-5 h-5 text-green-500"></i>
-                                <span>已确认</span>
-                            </button>
-                            <button class="sidebar-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="unconfirmed">
-                                <i data-lucide="alert-circle" class="w-5 h-5 text-amber-500"></i>
-                                <span>未确认</span>
-                            </button>
-                            <button class="sidebar-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left" data-filter="stats">
-                                <i data-lucide="bar-chart-3" class="w-5 h-5 text-blue-500"></i>
-                                <span>统计</span>
-                            </button>
+                <div class="flex flex-col md:flex-row gap-4 md:gap-6">
+                    <!-- 侧边栏: 移动端水平滚动，桌面端垂直固定 -->
+                    <aside id="sidebar" class="flex-shrink-0 md:w-48">
+                        <div class="glass-card rounded-xl p-2 md:p-4 md:sticky md:top-24">
+                            <div class="flex md:flex-col gap-1 md:gap-2 overflow-x-auto md:overflow-visible">
+                                <button class="sidebar-item active flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="all">
+                                    <i data-lucide="images" class="w-4 h-4 md:w-5 md:h-5 text-purple-500 shrink-0"></i>
+                                    <span>全部图片</span>
+                                </button>
+                                <button class="sidebar-item flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="confirmed">
+                                    <i data-lucide="check-circle" class="w-4 h-4 md:w-5 md:h-5 text-green-500 shrink-0"></i>
+                                    <span>已确认</span>
+                                </button>
+                                <button class="sidebar-item flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="unconfirmed">
+                                    <i data-lucide="alert-circle" class="w-4 h-4 md:w-5 md:h-5 text-amber-500 shrink-0"></i>
+                                    <span>未确认</span>
+                                </button>
+                                <button class="sidebar-item flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="stats">
+                                    <i data-lucide="bar-chart-3" class="w-4 h-4 md:w-5 md:h-5 text-blue-500 shrink-0"></i>
+                                    <span>统计</span>
+                                </button>
+                            </div>
                         </div>
                     </aside>
 
                     <!-- 主内容 -->
-                    <main class="flex-1">
+                    <main class="flex-1 min-w-0">
                         <!-- 图片管理内容 -->
                         <div id="tab-images" class="tab-content">
                             <!-- 搜索栏 -->
                             <div class="glass-card rounded-xl p-4 mb-6">
                                 <div class="flex flex-wrap gap-3">
                                     <input type="text" id="search-keyword" placeholder="搜索角色/作品/标签..." 
-                                        class="flex-1 min-w-64 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition">
+                                        class="flex-1 min-w-0 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition">
                                     <button id="search-btn" class="btn-primary px-6 py-2 rounded-lg font-medium">
                                         <i data-lucide="search" class="w-4 h-4 inline mr-1"></i>搜索
                                     </button>
@@ -230,8 +236,8 @@
                             </div>
 
                             <!-- 批量操作栏 -->
-                            <div id="batch-operations" class="glass-card rounded-xl p-4 mb-4 hidden">
-                                <div class="flex items-center justify-between">
+                            <div id="batch-operations" class="glass-card rounded-xl p-3 md:p-4 mb-4 hidden">
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                                     <div class="flex items-center gap-4">
                                         <label class="flex items-center gap-2 cursor-pointer">
                                             <input type="checkbox" id="select-all" class="w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400">
@@ -239,16 +245,16 @@
                                         </label>
                                         <span id="selected-count" class="text-sm text-gray-500">已选择 0 张图片</span>
                                     </div>
-                                    <div class="flex gap-2">
-                                        <button id="batch-confirm-btn" class="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition flex items-center gap-1">
+                                    <div class="flex gap-2 w-full sm:w-auto">
+                                        <button id="batch-confirm-btn" class="flex-1 sm:flex-none px-3 md:px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition flex items-center justify-center gap-1 text-sm">
                                             <i data-lucide="check-circle" class="w-4 h-4"></i>
                                             确认
                                         </button>
-                                        <button id="batch-unconfirm-btn" class="px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition flex items-center gap-1">
+                                        <button id="batch-unconfirm-btn" class="flex-1 sm:flex-none px-3 md:px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition flex items-center justify-center gap-1 text-sm">
                                             <i data-lucide="alert-circle" class="w-4 h-4"></i>
-                                            取消确认
+                                            取消
                                         </button>
-                                        <button id="batch-delete-btn" class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition flex items-center gap-1">
+                                        <button id="batch-delete-btn" class="flex-1 sm:flex-none px-3 md:px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition flex items-center justify-center gap-1 text-sm">
                                             <i data-lucide="trash-2" class="w-4 h-4"></i>
                                             删除
                                         </button>
@@ -257,7 +263,7 @@
                             </div>
 
                             <!-- 图片列表 -->
-                            <div id="image-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
+                            <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 md:gap-4"></div>
                             
                             <!-- 导入按钮 -->
                             <div class="mt-4 flex justify-center">
@@ -293,26 +299,26 @@
                             </div>
                             
                             <!-- 翻页 -->
-                            <div class="mt-6 flex items-center justify-center gap-2">
-                                <button id="first-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="首页">
+                            <div class="mt-6 flex items-center justify-center gap-1 sm:gap-2">
+                                <button id="first-page" class="hidden sm:block p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="首页">
                                     <i data-lucide="chevrons-left" class="w-5 h-5"></i>
                                 </button>
                                 <button id="prev-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="上一页">
                                     <i data-lucide="chevron-left" class="w-5 h-5"></i>
                                 </button>
-                                <div class="flex items-center gap-2 px-4">
-                                    <span class="text-gray-600">第</span>
+                                <div class="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
+                                    <span class="text-gray-600 text-sm">第</span>
                                     <input type="number" id="page-input" min="1" 
-                                        class="w-16 px-2 py-1 text-center rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                                    <span class="text-gray-600">/ <span id="total-pages">1</span> 页</span>
-                                    <button id="go-page" class="px-3 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition">
+                                        class="w-14 sm:w-16 px-1 sm:px-2 py-1 text-center rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm">
+                                    <span class="text-gray-600 text-sm">/ <span id="total-pages">1</span> 页</span>
+                                    <button id="go-page" class="hidden sm:block px-3 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition text-sm">
                                         跳转
                                     </button>
                                 </div>
                                 <button id="next-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="下一页">
                                     <i data-lucide="chevron-right" class="w-5 h-5"></i>
                                 </button>
-                                <button id="last-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="尾页">
+                                <button id="last-page" class="hidden sm:block p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="尾页">
                                     <i data-lucide="chevrons-right" class="w-5 h-5"></i>
                                 </button>
                             </div>
@@ -320,27 +326,27 @@
 
                         <!-- 别名管理 -->
                         <div id="tab-aliases" class="tab-content hidden">
-                            <div class="glass-card rounded-xl p-4 mb-4">
-                                <div class="flex flex-wrap gap-3 items-center">
+                            <div class="glass-card rounded-xl p-3 md:p-4 mb-4">
+                                <div class="flex flex-wrap gap-2 md:gap-3 items-center">
                                     <input type="text" id="search-alias" placeholder="搜索别名..." 
-                                        class="flex-1 min-w-40 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                                    <select id="alias-type-filter" class="px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                        class="flex-1 min-w-0 w-full sm:w-auto px-3 md:px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm md:text-base">
+                                    <select id="alias-type-filter" class="px-3 md:px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm md:text-base">
                                         <option value="">全部类型</option>
                                         <option value="character">角色</option>
                                         <option value="work">作品</option>
                                     </select>
-                                    <select id="alias-page-size" class="px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
+                                    <select id="alias-page-size" class="hidden sm:block px-3 md:px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm md:text-base">
                                         <option value="25">25条/页</option>
                                         <option value="50">50条/页</option>
                                         <option value="100">100条/页</option>
                                     </select>
-                                    <button id="search-alias-btn" class="btn-primary px-4 py-2 rounded-lg">
+                                    <button id="search-alias-btn" class="btn-primary px-3 md:px-4 py-2 rounded-lg text-sm md:text-base">
                                         <i data-lucide="search" class="w-4 h-4 inline mr-1"></i>搜索
                                     </button>
-                                    <button id="import-alias-btn" class="px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200">
+                                    <button id="import-alias-btn" class="px-3 md:px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-sm md:text-base">
                                         <i data-lucide="upload" class="w-4 h-4 inline mr-1"></i>导入
                                     </button>
-                                    <button id="add-alias-btn" class="btn-primary px-4 py-2 rounded-lg">
+                                    <button id="add-alias-btn" class="btn-primary px-3 md:px-4 py-2 rounded-lg text-sm md:text-base">
                                         <i data-lucide="plus" class="w-4 h-4 inline mr-1"></i>添加
                                     </button>
                                 </div>
@@ -413,16 +419,16 @@
                         <!-- 插件配置 -->
                         <div id="tab-config" class="tab-content hidden">
                             <div class="glass-card rounded-xl p-6">
-                                <div class="flex items-center justify-between mb-6">
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 mb-6">
                                     <div>
                                         <h2 class="text-xl font-bold text-gray-800">插件配置</h2>
                                         <p class="text-gray-500 text-sm mt-1">修改配置后点击保存，插件将自动重启以应用新配置</p>
                                     </div>
-                                    <div class="flex gap-2">
-                                        <button id="reset-config-btn" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
+                                    <div class="flex gap-2 w-full sm:w-auto">
+                                        <button id="reset-config-btn" class="flex-1 sm:flex-none px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition text-sm">
                                             <i data-lucide="rotate-ccw" class="w-4 h-4 inline mr-1"></i>重置
                                         </button>
-                                        <button id="save-config-btn" class="btn-primary px-6 py-2 rounded-lg font-medium">
+                                        <button id="save-config-btn" class="flex-1 sm:flex-none btn-primary px-6 py-2 rounded-lg font-medium text-sm">
                                             <i data-lucide="save" class="w-4 h-4 inline mr-1"></i>保存配置
                                         </button>
                                     </div>
@@ -442,27 +448,26 @@
         </div>
 
         <!-- 图片详情弹窗 -->
-        <div id="detail-modal" class="fixed inset-0 hidden">
-            <div class="modal-overlay absolute inset-0 cursor-pointer" id="detail-modal-overlay" onclick="handleDetailOverlayClick()"></div>
-            <div class="modal-content relative flex items-center justify-center min-h-screen p-4 pointer-events-none">
+        <div id="detail-modal" class="fixed inset-0 z-50 hidden">
+            <div class="modal-overlay absolute inset-0 z-40 cursor-pointer" id="detail-modal-overlay" onclick="handleDetailOverlayClick()"></div>
+            <div class="modal-content relative z-50 flex items-center justify-center min-h-screen p-2 md:p-4 pointer-events-none">
                 <div class="glass-card rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden pointer-events-auto">
-                    <div class="flex justify-between items-center p-4 border-b border-gray-100">
-                        <h2 class="text-xl font-bold text-gray-800">图片详情</h2>
+                    <div class="flex justify-between items-center p-3 md:p-4 border-b border-gray-100">
+                        <h2 class="text-lg md:text-xl font-bold text-gray-800">图片详情</h2>
                         <button class="close p-2 hover:bg-gray-100 rounded-lg transition">
                             <i data-lucide="x" class="w-5 h-5"></i>
                         </button>
                     </div>
-                    <div class="p-4 overflow-y-auto max-h-[calc(90vh-140px)]">
-                        <div class="flex gap-6">
-                            <!-- 图片预览 -->
-                            <div class="w-1/2">
-                                <div class="aspect-square rounded-xl overflow-hidden bg-gray-100">
+                    <div class="p-3 md:p-4 overflow-y-auto max-h-[calc(90vh-140px)]">
+                        <div class="flex flex-col md:flex-row gap-4 md:gap-6">
+                            <div class="w-full md:w-1/2">
+                                <div class="aspect-square rounded-xl overflow-hidden bg-gray-100 max-h-[40vh] md:max-h-none">
                                     <img id="detail-image" src="" alt="" class="w-full h-full object-contain">
                                 </div>
-                                <div class="mt-4 space-y-2 text-sm text-gray-600">
+                                <div class="mt-3 md:mt-4 space-y-2 text-sm text-gray-600">
                                     <div class="flex justify-between">
                                         <span>文件名:</span>
-                                        <span id="detail-filename" class="text-gray-800 font-medium"></span>
+                                        <span id="detail-filename" class="text-gray-800 font-medium truncate ml-2"></span>
                                     </div>
                                     <div class="flex justify-between">
                                         <span>群号:</span>
@@ -478,8 +483,7 @@
                                     </div>
                                 </div>
                             </div>
-                            <!-- 信息编辑 -->
-                            <div class="w-1/2 space-y-4">
+                            <div class="w-full md:w-1/2 space-y-4">
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">角色</label>
                                     <div id="character-editor" class="space-y-2">
@@ -502,23 +506,23 @@
                             </div>
                         </div>
                     </div>
-                    <div class="p-4 border-t border-gray-100 flex flex-wrap gap-2 justify-end">
-                        <button id="save-detail-btn" class="btn-primary px-4 py-2 rounded-lg">
+                    <div class="p-3 md:p-4 border-t border-gray-100 flex flex-wrap gap-2 justify-end">
+                        <button id="save-detail-btn" class="btn-primary px-3 md:px-4 py-2 rounded-lg text-sm">
                             <i data-lucide="save" class="w-4 h-4 inline mr-1"></i>保存
                         </button>
-                        <button id="confirm-btn" class="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200">
+                        <button id="confirm-btn" class="px-3 md:px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm">
                             <i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i>确认
                         </button>
-                        <button id="unconfirm-btn" class="px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200">
+                        <button id="unconfirm-btn" class="px-3 md:px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-sm">
                             <i data-lucide="alert-circle" class="w-4 h-4 inline mr-1"></i>取消确认
                         </button>
-                        <button id="reanalyze-btn" class="px-4 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200">
-                            <i data-lucide="refresh-cw" class="w-4 h-4 inline mr-1"></i>重新分析
+                        <button id="reanalyze-btn" class="px-3 md:px-4 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 text-sm">
+                            <i data-lucide="refresh-cw" class="w-4 h-4 inline mr-1"></i>重分析
                         </button>
-                        <button id="recognize-btn" class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">
-                            <i data-lucide="user-check" class="w-4 h-4 inline mr-1"></i>识别角色
+                        <button id="recognize-btn" class="px-3 md:px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm">
+                            <i data-lucide="user-check" class="w-4 h-4 inline mr-1"></i>识别
                         </button>
-                        <button id="delete-btn" class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200">
+                        <button id="delete-btn" class="px-3 md:px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 text-sm">
                             <i data-lucide="trash-2" class="w-4 h-4 inline mr-1"></i>删除
                         </button>
                     </div>
@@ -528,9 +532,9 @@
 
         <!-- 添加别名弹窗 -->
         <div id="alias-modal" class="fixed inset-0 z-50 hidden">
-            <div class="modal-overlay absolute inset-0" onclick="document.getElementById('alias-modal').classList.add('hidden')"></div>
-            <div class="modal-content relative z-10 flex items-center justify-center min-h-screen p-4">
-                <div class="glass-card rounded-2xl shadow-2xl w-full max-w-md">
+            <div class="modal-overlay absolute inset-0 z-40" onclick="document.getElementById('alias-modal').classList.add('hidden')"></div>
+            <div class="modal-content relative z-50 flex items-center justify-center min-h-screen p-2 md:p-4 pointer-events-none">
+                <div class="glass-card rounded-2xl shadow-2xl w-full max-w-md pointer-events-auto">
                     <div class="flex justify-between items-center p-4 border-b border-gray-100">
                         <h2 class="text-xl font-bold text-gray-800">添加别名</h2>
                         <button onclick="document.getElementById('alias-modal').classList.add('hidden')" class="p-2 hover:bg-gray-100 rounded-lg transition">
@@ -570,9 +574,9 @@
     </div>
 
     <!-- 自定义确认弹窗 -->
-    <div id="confirm-modal" class="fixed inset-0 hidden">
-        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" id="confirm-overlay"></div>
-        <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+    <div id="confirm-modal" class="fixed inset-0 z-50 hidden">
+        <div class="absolute inset-0 z-40 bg-black/50 backdrop-blur-sm" id="confirm-overlay"></div>
+        <div class="relative z-50 flex items-center justify-center min-h-screen p-4 pointer-events-none">
             <div class="glass-card rounded-2xl shadow-2xl w-full max-w-sm p-6 pointer-events-auto">
                 <h3 id="confirm-title" class="text-lg font-bold text-gray-800 mb-2">确认操作</h3>
                 <p id="confirm-message" class="text-gray-600 mb-6">确定要执行此操作吗？</p>

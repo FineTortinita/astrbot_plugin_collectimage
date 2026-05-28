@@ -33,6 +33,7 @@ function showToast(message, type = 'success') {
 function showConfirm(title, message) {
     return new Promise((resolve) => {
         const modal = document.getElementById('confirm-modal');
+        const overlay = document.getElementById('confirm-overlay');
         const titleEl = document.getElementById('confirm-title');
         const messageEl = document.getElementById('confirm-message');
         const cancelBtn = document.getElementById('confirm-cancel');
@@ -42,18 +43,18 @@ function showConfirm(title, message) {
         messageEl.textContent = message;
         modal.classList.remove('hidden');
         
-        const closeModal = (result) => {
-            modal.classList.add('hidden');
+        function cleanup() {
             cancelBtn.removeEventListener('click', handleCancel);
             okBtn.removeEventListener('click', handleOk);
-            resolve(result);
-        };
-        
-        const handleCancel = () => closeModal(false);
-        const handleOk = () => closeModal(true);
+            overlay.removeEventListener('click', handleOverlay);
+        }
+        function handleCancel() { modal.classList.add('hidden'); cleanup(); resolve(false); }
+        function handleOk() { modal.classList.add('hidden'); cleanup(); resolve(true); }
+        function handleOverlay() { modal.classList.add('hidden'); cleanup(); resolve(false); }
         
         cancelBtn.addEventListener('click', handleCancel);
         okBtn.addEventListener('click', handleOk);
+        overlay.addEventListener('click', handleOverlay);
     });
 }
 
