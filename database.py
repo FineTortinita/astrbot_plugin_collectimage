@@ -10,12 +10,35 @@ from astrbot.api import logger
 class Database:
     def __init__(self, db_dir: str):
         self.db_path = os.path.join(db_dir, "collectimage.db")
+        self._conn: Optional[sqlite3.Connection] = None
+        self._phash_cache: dict[int, int] = {}  # image_id -> phash_int
         self._init_db()
+        self._load_phash_cache()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        """获取持久化数据库连接（WAL 模式，复用连接）"""
+        if self._conn is None:
+            self._conn = sqlite3.connect(
+                self.db_path, check_same_thread=False
+            )
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn
+
+    def _load_phash_cache(self):
+        """加载所有 phash 到内存缓存，避免每次去重都全表扫描"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, phash FROM images WHERE phash IS NOT NULL AND phash != ''"
+        )
+        self._phash_cache.clear()
+        for row in cursor.fetchall():
+            try:
+                self._phash_cache[row[0]] = int(row[1], 16)
+            except (ValueError, TypeError):
+                pass
 
     def _init_db(self):
         conn = self._get_connection()
@@ -49,22 +72,20 @@ class Database:
             cursor.execute("ALTER TABLE images ADD COLUMN phash TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
-        
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash)")
-        
+
         self._init_alias_db(conn, cursor)
-        
+
         conn.commit()
-        conn.close()
 
     def _init_alias_db(self, conn=None, cursor=None):
         """初始化别名表"""
-        should_close = False
-        if conn is None or cursor is None:
+        own_conn = conn is None
+        if own_conn:
             conn = self._get_connection()
             cursor = conn.cursor()
-            should_close = True
-        
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS character_aliases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,18 +95,15 @@ class Database:
                 UNIQUE(alias_type, original_name, alias)
             )
         """)
-        
-        if should_close:
+
+        if own_conn:
             conn.commit()
-            conn.close()
 
     def is_hash_exists(self, file_hash: str) -> bool:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT 1 FROM images WHERE file_hash = ? LIMIT 1", (file_hash,))
-        result = cursor.fetchone() is not None
-        conn.close()
-        return result
+        return cursor.fetchone() is not None
 
     def get_all_phashes(self) -> list:
         """获取所有非空的 phash 及对应 id"""
@@ -93,17 +111,17 @@ class Database:
         cursor = conn.cursor()
         cursor.execute("SELECT id, phash FROM images WHERE phash IS NOT NULL AND phash != ''")
         rows = cursor.fetchall()
-        conn.close()
         return [(row[0], row[1]) for row in rows]
 
     def find_similar_phash(self, phash: str, threshold: int = 10) -> Optional[dict]:
-        """查找与给定 phash 汉明距离 <= threshold 的图片，返回第一个匹配"""
+        """查找与给定 phash 汉明距离 <= threshold 的图片（使用内存缓存）"""
         if not phash:
             return None
-        all_phashes = self.get_all_phashes()
-        phash_int = int(phash, 16)
-        for img_id, existing_phash in all_phashes:
-            existing_int = int(existing_phash, 16)
+        try:
+            phash_int = int(phash, 16)
+        except (ValueError, TypeError):
+            return None
+        for img_id, existing_int in self._phash_cache.items():
             distance = bin(phash_int ^ existing_int).count('1')
             if distance <= threshold:
                 return self.get_image_by_id(img_id)
@@ -116,11 +134,14 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("UPDATE images SET phash = ? WHERE id = ?", (phash, image_id))
             conn.commit()
+            if phash and cursor.rowcount > 0:
+                try:
+                    self._phash_cache[image_id] = int(phash, 16)
+                except (ValueError, TypeError):
+                    pass
             return cursor.rowcount > 0
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def get_images_without_phash(self, limit: int = 100) -> list:
         """获取没有 phash 的图片记录"""
@@ -131,7 +152,6 @@ class Database:
             (limit,)
         )
         rows = cursor.fetchall()
-        conn.close()
         return [{"id": row[0], "file_path": row[1]} for row in rows]
 
     def add_image(self, image_data: dict) -> bool:
@@ -159,11 +179,15 @@ class Database:
                 ),
             )
             conn.commit()
+            phash = image_data.get('phash')
+            if phash and cursor.lastrowid:
+                try:
+                    self._phash_cache[cursor.lastrowid] = int(phash, 16)
+                except (ValueError, TypeError):
+                    pass
             return True
         except sqlite3.IntegrityError:
             return False
-        finally:
-            conn.close()
 
     def insert_image(
         self,
@@ -203,11 +227,14 @@ class Database:
                 ),
             )
             conn.commit()
+            if phash and cursor.lastrowid:
+                try:
+                    self._phash_cache[cursor.lastrowid] = int(phash, 16)
+                except (ValueError, TypeError):
+                    pass
             return True
         except sqlite3.IntegrityError:
             return False
-        finally:
-            conn.close()
 
     def get_all_images(self, limit: int = 100, offset: int = 0) -> list:
         conn = self._get_connection()
@@ -217,7 +244,6 @@ class Database:
             (limit, offset),
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def search_by_tag(self, tag: str, limit: int = 50) -> list:
@@ -228,7 +254,6 @@ class Database:
             (f'%"{tag}"%', limit),
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def search_by_character(self, character: str, limit: int = 50) -> list:
@@ -239,7 +264,6 @@ class Database:
             (f"%{character}%", limit),
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def get_image_by_hash(self, file_hash: str) -> Optional[dict]:
@@ -247,7 +271,6 @@ class Database:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM images WHERE file_hash = ?", (file_hash,))
         row = cursor.fetchone()
-        conn.close()
         return dict(row) if row else None
 
     def get_image_by_id(self, image_id: int) -> Optional[dict]:
@@ -255,7 +278,6 @@ class Database:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM images WHERE id = ?", (image_id,))
         row = cursor.fetchone()
-        conn.close()
         return dict(row) if row else None
 
     def update_image(
@@ -290,8 +312,6 @@ class Database:
             return True
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def update_character(self, image_id: int, character: str) -> bool:
         """只更新 character 字段"""
@@ -306,8 +326,6 @@ class Database:
             return True
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def update_confirmed(self, image_id: int, confirmed: int) -> bool:
         """更新确认状态"""
@@ -322,8 +340,6 @@ class Database:
             return True
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def delete_image(self, image_id: int) -> bool:
         conn = self._get_connection()
@@ -331,48 +347,44 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
             conn.commit()
+            self._phash_cache.pop(image_id, None)
             return True
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def cleanup_missing_files(self) -> int:
         """清理数据库中有记录但文件不存在的条目，返回清理数量"""
-        import os
         cleaned = 0
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT id, file_path FROM images")
             rows = cursor.fetchall()
-            
+
             for row in rows:
                 image_id = row[0]
                 file_path = row[1]
                 if file_path and not os.path.exists(file_path):
                     cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
+                    self._phash_cache.pop(image_id, None)
                     cleaned += 1
-            
+
             conn.commit()
-            conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"[CollectImage] 清理缺失文件失败: {e}")
         return cleaned
 
     def cleanup_orphaned_files(self, images_dir: str) -> int:
         """清理images目录下没有数据库记录的文件，返回清理数量"""
-        import os
         cleaned = 0
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
-            
+
             # 获取所有数据库中的文件路径
             cursor.execute("SELECT file_path FROM images")
             db_paths = {row[0] for row in cursor.fetchall() if row[0]}
-            conn.close()
-            
+
             # 扫描images目录
             if os.path.exists(images_dir):
                 for filename in os.listdir(images_dir):
@@ -381,7 +393,7 @@ class Database:
                         try:
                             os.remove(file_path)
                             cleaned += 1
-                        except Exception as e:
+                        except OSError as e:
                             logger.warning(f"[CollectImage] 删除孤立文件失败: {file_path}, {e}")
         except Exception as e:
             logger.error(f"[CollectImage] 清理孤立文件失败: {e}")
@@ -425,10 +437,9 @@ class Database:
             params,
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
-    def count_images(self, tag: str = None, character: str = None, description: str = None, 
+    def count_images(self, tag: str = None, character: str = None, description: str = None,
                      group_id: str = None, confirmed: int = None) -> int:
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -452,31 +463,30 @@ class Database:
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         cursor.execute(f"SELECT COUNT(*) FROM images WHERE {where_clause}", params)
         count = cursor.fetchone()[0]
-        conn.close()
         return count
 
     def get_stats(self, days: int = 7) -> dict:
         """获取统计信息"""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         # 总数
         cursor.execute("SELECT COUNT(*) FROM images")
         total = cursor.fetchone()[0]
-        
+
         # 已确认
         cursor.execute("SELECT COUNT(*) FROM images WHERE confirmed = 1")
         confirmed = cursor.fetchone()[0]
-        
+
         # 未确认
         cursor.execute("SELECT COUNT(*) FROM images WHERE confirmed = 0")
         unconfirmed = cursor.fetchone()[0]
-        
+
         # 今日新增
         today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
         cursor.execute("SELECT COUNT(*) FROM images WHERE timestamp >= ?", (today_start,))
         today_new = cursor.fetchone()[0]
-        
+
         # 每日新增趋势
         daily_data = []
         for i in range(days - 1, -1, -1):
@@ -490,9 +500,7 @@ class Database:
                 "label": date.strftime("%m/%d"),
                 "count": count
             })
-        
-        conn.close()
-        
+
         return {
             "total": total,
             "confirmed": confirmed,
@@ -513,7 +521,6 @@ class Database:
             LIMIT ?
         """, (pattern, pattern, limit))
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def search_all_random(self, keyword: str, limit: int = 1) -> list:
@@ -528,7 +535,6 @@ class Database:
             LIMIT ?
         """, (pattern, pattern, pattern, pattern, limit))
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def add_alias(self, alias_type: str, original_name: str, alias: str) -> bool:
@@ -541,12 +547,9 @@ class Database:
                 (alias_type, original_name, alias)
             )
             conn.commit()
-            affected = cursor.rowcount
-            return affected > 0
+            return cursor.rowcount > 0
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def get_all_aliases(self) -> list:
         """获取所有别名"""
@@ -554,7 +557,6 @@ class Database:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM character_aliases ORDER BY alias_type, original_name")
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def get_aliases_by_type(self, alias_type: str) -> list:
@@ -566,7 +568,6 @@ class Database:
             (alias_type,)
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def delete_alias(self, alias_id: int) -> bool:
@@ -576,12 +577,9 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM character_aliases WHERE id = ?", (alias_id,))
             conn.commit()
-            affected = cursor.rowcount
-            return affected > 0
+            return cursor.rowcount > 0
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def search_alias(self, keyword: str) -> list:
         """搜索别名"""
@@ -593,7 +591,6 @@ class Database:
             (pattern, pattern)
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def import_aliases(self, aliases_data: list) -> int:
@@ -617,7 +614,6 @@ class Database:
                     except Exception as e:
                         logger.warning(f"[CollectImage] 导入别名失败: {original_name} -> {alias}, {e}")
             conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"[CollectImage] 批量导入别名失败: {e}")
         return imported
@@ -628,7 +624,6 @@ class Database:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM character_aliases")
         count = cursor.fetchone()[0]
-        conn.close()
         return count
 
     def get_original_names_by_alias(self, keyword: str, alias_type: str = None) -> list:
@@ -636,7 +631,7 @@ class Database:
         conn = self._get_connection()
         cursor = conn.cursor()
         pattern = f"%{keyword}%"
-        
+
         if alias_type:
             cursor.execute(
                 "SELECT DISTINCT original_name FROM character_aliases WHERE alias_type = ? AND alias LIKE ?",
@@ -648,7 +643,6 @@ class Database:
                 (pattern,)
             )
         rows = cursor.fetchall()
-        conn.close()
         return [row[0] for row in rows]
 
     def get_work_original_names_by_alias(self, keyword: str) -> list:
@@ -713,94 +707,75 @@ class Database:
         return result
 
     def _build_search_conditions(self, keyword: str) -> tuple:
-        """构建搜索条件和参数"""
+        """构建搜索条件和参数（去重优化）"""
         conditions = []
         params = []
-        
-        # 1. 直接匹配用户输入 (兼容新旧格式)
-        pattern = f"%{keyword}%"
-        conditions.append("(character LIKE ? OR ai_detect LIKE ? OR tags LIKE ? OR description LIKE ?)")
-        params.extend([pattern, pattern, pattern, pattern])
-        
-        # 2. 匹配 JSON 格式中的 name 字段 (新格式)
-        name_pattern = f'%"{keyword}"%'
-        conditions.append("character LIKE ?")
-        params.append(name_pattern)
-        
-        # 3. 匹配 JSON 格式中的 work 字段 (新格式)
-        work_pattern = f'%"work": "%{keyword}%"%'
-        conditions.append("character LIKE ?")
-        params.append(work_pattern)
-        
-        # 4. 用户输入的简繁转换
+        seen = set()
+
+        def add_character_like(pattern: str):
+            if pattern not in seen:
+                seen.add(pattern)
+                conditions.append("character LIKE ?")
+                params.append(pattern)
+
+        def add_multi_field_like(term: str):
+            key = ("multi", term)
+            if key not in seen:
+                seen.add(key)
+                pattern = f"%{term}%"
+                conditions.append(
+                    "(character LIKE ? OR ai_detect LIKE ? OR tags LIKE ? OR description LIKE ?)"
+                )
+                params.extend([pattern, pattern, pattern, pattern])
+
+        # 收集所有变体搜索词
+        terms = [keyword]
         simplified = self._simplify_chinese(keyword)
         if simplified != keyword:
-            s_pattern = f"%{simplified}%"
-            conditions.append("(character LIKE ? OR ai_detect LIKE ?)")
-            params.extend([s_pattern, s_pattern])
-            
-            # JSON 格式的简繁
-            s_name_pattern = f'%"{simplified}"%'
-            conditions.append("character LIKE ?")
-            params.append(s_name_pattern)
-        
+            terms.append(simplified)
         traditional = self._traditionalize(keyword)
         if traditional != keyword and traditional != simplified:
-            t_pattern = f"%{traditional}%"
-            conditions.append("(character LIKE ? OR ai_detect LIKE ?)")
-            params.extend([t_pattern, t_pattern])
-            
-            # JSON 格式的繁化
-            t_name_pattern = f'%"{traditional}"%'
-            conditions.append("character LIKE ?")
-            params.append(t_name_pattern)
-        
-        # 5. 角色别名 → 原始名（限制数量避免SQL条件过多）
-        char_original_names = self.get_original_names_by_alias(keyword, "character")
-        char_original_names = char_original_names[:20]
-        for orig_name in char_original_names:
-            # 匹配原始名
-            conditions.append("character LIKE ?")
-            params.append(f"%{orig_name}%")
-            # 匹配 JSON 中的 name 字段
-            conditions.append("character LIKE ?")
-            params.append(f'%"{orig_name}"%')
-            # 原始名的简繁转换
-            s_name = self._simplify_chinese(orig_name)
-            if s_name != orig_name:
-                conditions.append("character LIKE ?")
-                params.append(f"%{s_name}%")
-                conditions.append("character LIKE ?")
-                params.append(f'%"{s_name}"%')
-            # 原始名的繁化
-            t_name = self._traditionalize(orig_name)
-            if t_name != orig_name and t_name != s_name:
-                conditions.append("character LIKE ?")
-                params.append(f"%{t_name}%")
-                conditions.append("character LIKE ?")
-                params.append(f'%"{t_name}"%')
-        
-        # 6. 作品别名 → 原始名（限制数量避免SQL条件过多）
-        work_original_names = self.get_work_original_names_by_alias(keyword)
-        work_original_names = work_original_names[:20]
-        for orig_name in work_original_names:
-            # 匹配 work 字段 (新格式)
-            conditions.append("character LIKE ?")
-            params.append(f'%"work": "%{orig_name}%"%')
-            # 作品名简繁
-            s_name = self._simplify_chinese(orig_name)
-            if s_name != orig_name:
-                conditions.append("character LIKE ?")
-                params.append(f'%"work": "%{s_name}%"%')
-        
+            terms.append(traditional)
+
+        # 1. 每个变体：多字段模糊匹配 + JSON name 精确匹配
+        for term in terms:
+            add_multi_field_like(term)
+            add_character_like(f'%"{term}"%')
+
+        # 2. 每个变体：JSON work 字段匹配
+        for term in terms:
+            add_character_like(f'%"work": "%{term}%"%')
+
+        # 3. 角色别名 → 原始名（含简繁变体）
+        char_originals = []
+        for orig in self.get_original_names_by_alias(keyword, "character")[:20]:
+            char_originals.append(orig)
+            s = self._simplify_chinese(orig)
+            if s != orig:
+                char_originals.append(s)
+            t = self._traditionalize(orig)
+            if t != orig and t != s:
+                char_originals.append(t)
+
+        for orig in char_originals:
+            add_character_like(f"%{orig}%")
+            add_character_like(f'%"{orig}"%')
+
+        # 4. 作品别名 → 原始名（含简繁变体）
+        for orig in self.get_work_original_names_by_alias(keyword)[:20]:
+            add_character_like(f'%"work": "%{orig}%"%')
+            s = self._simplify_chinese(orig)
+            if s != orig:
+                add_character_like(f'%"work": "%{s}%"%')
+
         return conditions, params
 
     def search_character_random_with_alias(self, keyword: str, limit: int = 1) -> list:
         """模糊搜索角色(含作品)并随机选取，支持别名匹配"""
         conditions, params = self._build_search_conditions(keyword)
-        
+
         where_clause = " OR ".join(conditions)
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -808,15 +783,14 @@ class Database:
             params + [limit]
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def search_all_random_with_alias(self, keyword: str, limit: int = 1) -> list:
         """模糊搜索标签、描述和角色(含作品)并随机选取，支持别名匹配"""
         conditions, params = self._build_search_conditions(keyword)
-        
+
         where_clause = " OR ".join(conditions)
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -824,7 +798,6 @@ class Database:
             params + [limit]
         )
         rows = cursor.fetchall()
-        conn.close()
         return [dict(row) for row in rows]
 
     def search_with_alias(self, keyword: str, limit: int = 50, offset: int = 0,
@@ -835,18 +808,21 @@ class Database:
             where_clause = f"({where_clause}) AND confirmed = ?"
             params.append(confirmed)
         conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM images WHERE {where_clause}", params)
-            total = cursor.fetchone()[0]
-            query_params = params + [limit, offset]
-            cursor.execute(
-                f"SELECT * FROM images WHERE {where_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-                query_params
-            )
-            return [dict(row) for row in cursor.fetchall()], total
-        finally:
-            conn.close()
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM images WHERE {where_clause}", params)
+        total = cursor.fetchone()[0]
+        query_params = params + [limit, offset]
+        cursor.execute(
+            f"SELECT * FROM images WHERE {where_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            query_params
+        )
+        return [dict(row) for row in cursor.fetchall()], total
 
     def close(self):
-        pass
+        if self._conn:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            self._phash_cache.clear()
