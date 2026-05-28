@@ -366,7 +366,7 @@ class CollectImagePlugin(Star):
                 if tmp_path and os.path.exists(tmp_path):
                     try:
                         os.remove(tmp_path)
-                    except:
+                    except OSError:
                         pass
                 
         except Exception as e:
@@ -421,7 +421,7 @@ class CollectImagePlugin(Star):
                     try:
                         if self.db.add_alias(alias_type, original_name, alias):
                             imported += 1
-                    except:
+                    except Exception:
                         pass
                 
                 await asyncio.sleep(0.5)
@@ -744,7 +744,7 @@ class CollectImagePlugin(Star):
         try:
             json_match = re.search(r'\{[^{}]*\}', tags_text, re.DOTALL)
             matched_tags = json.loads(json_match.group()) if json_match else {}
-        except:
+        except (json.JSONDecodeError, ValueError):
             matched_tags = {}
 
         char_prompt = """请识别这张图片中的角色名称（如果有）。

@@ -1,10 +1,11 @@
 import asyncio
+import concurrent.futures
 import hashlib
 import io
+import json
 import os
 import secrets
 import time
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
@@ -89,8 +90,6 @@ class WebServer:
         self.BLOCK_DURATION = 300  # 5分钟封禁
         self.ATTEMPT_WINDOW = 300  # 5分钟内
         
-        # 线程池执行器 - 用于执行耗时操作
-        import concurrent.futures
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         
         self._import_state = {
@@ -345,7 +344,7 @@ class WebServer:
             if img.get("tags"):
                 try:
                     img["tags"] = json.loads(img["tags"])
-                except:
+                except (json.JSONDecodeError, ValueError):
                     pass
         return self._ok({"images": images, "total": total})
 
@@ -374,7 +373,7 @@ class WebServer:
             if img.get("tags"):
                 try:
                     img["tags"] = json.loads(img["tags"])
-                except:
+                except (json.JSONDecodeError, ValueError):
                     pass
 
         return self._ok({"images": images, "total": total, "keyword": keyword})
@@ -715,7 +714,6 @@ class WebServer:
             schema_path = os.path.join(os.path.dirname(__file__), "_conf_schema.json")
             if os.path.exists(schema_path):
                 with open(schema_path, "r", encoding="utf-8") as f:
-                    import json
                     schema = json.load(f)
                 return self._ok(schema)
             return self._err("配置定义文件不存在")
@@ -876,10 +874,6 @@ class WebServer:
             return self._err("导入正在进行中")
         
         try:
-            import json
-            import os
-            import asyncio
-            
             aliases_path = os.path.join(self.plugin.plugin_dir, "aliases.json")
             
             if not os.path.exists(aliases_path):
@@ -931,7 +925,7 @@ class WebServer:
                 try:
                     self.plugin.db.add_alias(alias_type, original_name, alias)
                     imported += 1
-                except:
+                except Exception:
                     pass
             
             self._import_state["imported"] = imported
@@ -987,6 +981,3 @@ class WebServer:
         if hasattr(self, '_executor') and self._executor:
             self._executor.shutdown(wait=False)
         logger.info("[CollectImage] WebUI 已停止")
-
-
-import json
