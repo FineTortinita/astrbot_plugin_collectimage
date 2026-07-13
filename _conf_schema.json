@@ -29,6 +29,16 @@
     "type": "int",
     "default": 3
   },
+  "min_image_width": {
+    "description": "自动收集时允许入库的最小图片宽度（像素）。宽度小于该值的图片会被跳过，用于过滤表情、小图和低价值素材。",
+    "type": "int",
+    "default": 600
+  },
+  "min_image_height": {
+    "description": "自动收集时允许入库的最小图片高度（像素）。高度小于该值的图片会被跳过，用于过滤表情、小图和低价值素材。",
+    "type": "int",
+    "default": 600
+  },
   "max_file_size_mb": {
     "description": "触发图片压缩的文件大小阈值（MB）。超过此大小的图片会被等比例压缩后再发送到 AnimeTrace API，避免 413 错误。推荐值：2MB。如果经常遇到 413 错误可降低此值。",
     "type": "int",
@@ -63,5 +73,21 @@
     "description": "CORS 允许的来源列表。用于跨域访问控制，留空表示禁止跨域，仅允许同源访问。如需允许特定域名访问，请添加完整URL（如 https://example.com）。",
     "type": "list",
     "default": []
+  },
+  "llm_provider_id": {
+    "description": "识图所用的 LLM Provider ID。用于图片筛选、标签分析、描述生成等所有视觉模型调用。留空则自动使用当前会话的默认 Provider，若仍无法获取则使用第一个可用 Provider。",
+    "type": "string",
+    "_special": "select_provider",
+    "default": ""
+  },
+  "duplicate_reply_probability": {
+    "description": "重复图片回复概率（0-100）。当监控群聊中发送的图片已存在于数据库时，以此概率引用原消息并回复提示。0 表示不回复，100 表示必定回复。",
+    "type": "int",
+    "default": 0
+  },
+  "duplicate_reply_messages": {
+    "description": "重复图片回复内容列表。触发回复时随机选择其中一条发送。支持多条消息轮换使用，用逗号分隔。",
+    "type": "list",
+    "default": ["这张图已经收录过了~", "图库里已经有这张图了哦", "这张图之前收录过了！"]
   }
 }

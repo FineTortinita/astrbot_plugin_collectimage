@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -44,6 +45,7 @@ class CollectImagePlugin(Star):
         self._worker_task = None
         self._init_task = None
         self._queued_image_ids: set = set()
+        self._replied_message_ids: set = set()
         
         self.web_server = None
         self._init_web_server()
@@ -112,9 +114,6 @@ class CollectImagePlugin(Star):
         
         # 初始化别名
         await self._init_aliases_async()
-        
-        # 为存量图片补算 phash
-        await self._backfill_phashes()
     
     async def _image_worker(self):
         """图片处理 worker - 串行处理队列中的图片"""
@@ -172,14 +171,8 @@ class CollectImagePlugin(Star):
             
             if self.db.is_hash_exists(file_hash):
                 logger.info("[CollectImage] 图片已存在 (MD5)，跳过")
+                await self._reply_duplicate(event, group_id)
                 return
-            
-            phash = self._calculate_phash(local_path)
-            if phash:
-                similar = self.db.find_similar_phash(phash)
-                if similar:
-                    logger.info(f"[CollectImage] 发现相似图片 (phash), 已有图片 id={similar['id']}，跳过")
-                    return
             
             image_url = msg.url or msg.file
             
@@ -225,7 +218,7 @@ class CollectImagePlugin(Star):
                     description=result.get("description"),
                     ai_detect=ai_detect,
                     confirmed=confirmed,
-                    phash=phash,
+                    phash=None,
                 )
                 logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
 
@@ -303,18 +296,12 @@ class CollectImagePlugin(Star):
                 
                 if self.db.is_hash_exists(file_hash):
                     logger.info("[CollectImage] 转发图片已存在 (MD5)，跳过")
+                    await self._reply_duplicate(event, group_id)
                     return
                 
                 if not self._check_image_size(tmp_path):
                     logger.info("[CollectImage] 转发图片尺寸过小，跳过")
                     return
-                
-                phash = self._calculate_phash(tmp_path)
-                if phash:
-                    similar = self.db.find_similar_phash(phash)
-                    if similar:
-                        logger.info(f"[CollectImage] 转发图片发现相似图片 (phash), 已有图片 id={similar['id']}，跳过")
-                        return
                 
                 # VLM 分析
                 result = await self.analyze_image(image_url, event)
@@ -358,7 +345,7 @@ class CollectImagePlugin(Star):
                     description=result.get("description"),
                     ai_detect=ai_detect,
                     confirmed=confirmed,
-                    phash=phash,
+                    phash=None,
                 )
                 logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
             finally:
@@ -430,25 +417,6 @@ class CollectImagePlugin(Star):
         except Exception as e:
             logger.error(f"[CollectImage] 导入别名失败: {e}")
 
-    async def _backfill_phashes(self):
-        batch_size = 50
-        total_updated = 0
-        while True:
-            images = self.db.get_images_without_phash(limit=batch_size)
-            if not images:
-                break
-            for img in images:
-                file_path = img["file_path"]
-                if not os.path.exists(file_path):
-                    continue
-                phash = self._calculate_phash(file_path)
-                if phash:
-                    self.db.update_phash(img["id"], phash)
-                    total_updated += 1
-            await asyncio.sleep(0.1)
-        if total_updated > 0:
-            logger.info(f"[CollectImage] phash 补算完成，更新 {total_updated} 张图片")
-
     def _init_web_server(self):
         webui_enabled = getattr(self.config, 'webui_enabled', False)
         if webui_enabled:
@@ -459,6 +427,77 @@ class CollectImagePlugin(Star):
                 asyncio.create_task(self.web_server.start())
             except Exception as e:
                 logger.error(f"[CollectImage] 启动 WebUI 失败: {e}")
+
+    async def _get_provider_id(self, event=None) -> str:
+        configured_id = (getattr(self.config, 'llm_provider_id', '') or '').strip()
+        if configured_id:
+            try:
+                provider = self.context.get_provider_by_id(provider_id=configured_id)
+                if provider:
+                    return configured_id
+            except Exception:
+                logger.warning(f"[CollectImage] 配置的 Provider '{configured_id}' 不可用，尝试回退")
+
+        if event:
+            try:
+                return await self.context.get_current_chat_provider_id(umo=event.unified_msg_origin)
+            except Exception:
+                pass
+
+        try:
+            return await self.context.get_current_chat_provider_id(umo="default")
+        except Exception:
+            pass
+
+        try:
+            all_providers = self.context.get_all_providers()
+            if all_providers:
+                return all_providers[0].meta().id
+        except Exception:
+            pass
+
+        return None
+
+    async def _reply_duplicate(self, event, group_id):
+        probability = getattr(self.config, 'duplicate_reply_probability', 0)
+        if probability <= 0:
+            return
+
+        message_id = getattr(event.message_obj, 'message_id', None)
+        if not message_id:
+            return
+
+        if message_id in self._replied_message_ids:
+            return
+
+        if random.randint(1, 100) > probability:
+            return
+
+        reply_messages = getattr(self.config, 'duplicate_reply_messages', [])
+        if not reply_messages:
+            return
+
+        reply_text = random.choice(reply_messages)
+
+        try:
+            bot = getattr(event, 'bot', None)
+            if not bot or not hasattr(bot, 'api'):
+                return
+
+            await bot.api.call_action(
+                'send_group_msg',
+                group_id=int(group_id),
+                message=[
+                    {"type": "reply", "data": {"id": str(message_id)}},
+                    {"type": "text", "data": {"text": reply_text}}
+                ]
+            )
+            self._replied_message_ids.add(message_id)
+            if len(self._replied_message_ids) > 1000:
+                self._replied_message_ids.clear()
+            logger.info(f"[CollectImage] 已回复重复图片: {reply_text}")
+        except Exception as e:
+            logger.error(f"[CollectImage] 回复重复图片失败: {e}")
 
     def _load_tags_library(self) -> dict:
         plugin_code_dir = os.path.dirname(__file__)
@@ -484,31 +523,27 @@ class CollectImagePlugin(Star):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
-    def _calculate_phash(self, file_path: str, hash_size: int = 8) -> str:
-        """计算感知哈希 (dHash): 基于相邻像素差异，对压缩/缩放/重编码鲁棒"""
+    def _get_positive_int_config(self, key: str, default: int) -> int:
         try:
-            with PILImage.open(file_path) as img:
-                img = img.convert('L').resize(
-                    (hash_size + 1, hash_size), PILImage.Resampling.LANCZOS
-                )
-                pixels = list(img.getdata())
-                hash_bits = []
-                for row in range(hash_size):
-                    offset = row * (hash_size + 1)
-                    for col in range(hash_size):
-                        hash_bits.append(1 if pixels[offset + col] > pixels[offset + col + 1] else 0)
-                hash_int = int(''.join(str(b) for b in hash_bits), 2)
-                return f'{hash_int:016x}'
-        except Exception as e:
-            logger.warning(f"[CollectImage] 计算感知哈希失败: {file_path}, {e}")
-            return ""
+            value = getattr(self.config, key, default)
+            if isinstance(value, int):
+                parsed = value
+            elif isinstance(value, str):
+                parsed = int(value.strip())
+            else:
+                parsed = default
+            return max(1, parsed)
+        except (TypeError, ValueError):
+            return default
 
-    def _check_image_size(self, file_path: str, min_size: int = 600) -> bool:
-        """检查图片尺寸，长或宽小于min_size返回False"""
+    def _check_image_size(self, file_path: str) -> bool:
+        """检查图片尺寸，宽高阈值来自插件配置。"""
+        min_width = self._get_positive_int_config('min_image_width', 600)
+        min_height = self._get_positive_int_config('min_image_height', 600)
         try:
             with PILImage.open(file_path) as img:
                 width, height = img.size
-                if width < min_size or height < min_size:
+                if width < min_width or height < min_height:
                     return False
                 return True
         except Exception as e:
@@ -760,8 +795,7 @@ class CollectImagePlugin(Star):
 
     async def analyze_image(self, image_url: str, event: AstrMessageEvent) -> dict:
         try:
-            umo = event.unified_msg_origin
-            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            provider_id = await self._get_provider_id(event)
 
             filter_prompt = getattr(self.config, "filter_prompt", "") or """请判断这张图片是否是有效的绘画素材。
 有效：有人物、角色、场景、物品等具体内容的动漫风格绘画、插画 CG、漫画、游戏立绘等人工绘制的图片。
@@ -996,10 +1030,8 @@ class CollectImagePlugin(Star):
         logger.info("[CollectImage] 插件已卸载")
 
     async def reanalyze_image(self, image_path: str) -> dict:
-        """重新分析图片（供 WebUI 调用）"""
         try:
-            umo = "default"
-            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            provider_id = await self._get_provider_id()
             image_url = f"file://{image_path}"
 
             content = await self._analyze_image_content(provider_id, image_url)

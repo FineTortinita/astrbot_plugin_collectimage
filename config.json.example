@@ -2,8 +2,8 @@
   "allowed_groups": [],
   "vision_model_endpoint": "",
   "vision_model_api_key": "",
-  "min_image_width": 50,
-  "min_image_height": 50,
+  "min_image_width": 600,
+  "min_image_height": 600,
   "max_image_size_bytes": 10485760,
   "enable_sticker_filter": true
 }
