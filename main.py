@@ -11,6 +11,7 @@ import time
 import uuid
 from io import BytesIO
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 import aiohttp
 from PIL import Image as PILImage
@@ -150,20 +151,22 @@ class CollectImagePlugin(Star):
     
     async def _do_process_single_image(self, task):
         """处理普通图片"""
-        msg = task['msg']
         event = task['event']
         group_id = task['group_id']
         sender_id = task['sender_id']
-        img_index = task['img_index']
-        
-        if self._is_sticker(msg, event, img_index):
-            logger.info("[CollectImage] 跳过表情包")
-            return
+        local_path = task.get('local_path')
+        cleanup_path = task.get('cleanup_path')
+        image_url = task.get('image_url') or local_path
         
         try:
-            local_path = await msg.convert_to_file_path()
+            if not local_path:
+                logger.warning("[CollectImage] 无法获取图片本地文件，跳过")
+                return
             
-            if not self._check_image_size(local_path):
+            size_check = self._check_image_size(local_path)
+            if size_check is None:
+                return
+            if not size_check:
                 logger.info("[CollectImage] 图片尺寸过小，跳过")
                 return
             
@@ -173,8 +176,6 @@ class CollectImagePlugin(Star):
                 logger.info("[CollectImage] 图片已存在 (MD5)，跳过")
                 await self._reply_duplicate(event, group_id)
                 return
-            
-            image_url = msg.url or msg.file
             
             # 先 VLM 分析，无效则不保存
             if image_url:
@@ -193,7 +194,7 @@ class CollectImagePlugin(Star):
                 logger.info(f"[CollectImage] 图片已保存: {image_path}")
                 
                 # AnimeTrace 识别
-                char_result = await self.recognize_character(image_url)
+                char_result = await self.recognize_character_from_file(local_path)
                 all_results = char_result.get("all_results", [])
                 ai_detect = char_result.get("ai_detect", "")
                 
@@ -224,6 +225,65 @@ class CollectImagePlugin(Star):
 
         except Exception as e:
             logger.error(f"[CollectImage] 处理单图失败: {e}")
+        finally:
+            if cleanup_path and os.path.exists(cleanup_path):
+                try:
+                    os.remove(cleanup_path)
+                except OSError as e:
+                    logger.debug(f"[CollectImage] 清理临时图片失败: {cleanup_path}, {e}")
+
+    async def _get_single_image_file_path(self, msg: Image) -> tuple[Optional[str], Optional[str]]:
+        """获取插件自有临时图片路径，避免 AstrBot 事件临时文件被清理。"""
+        try:
+            local_path = await msg.convert_to_file_path()
+            if local_path and os.path.exists(local_path):
+                return self._copy_to_owned_temp(local_path)
+            if local_path:
+                logger.warning(f"[CollectImage] 图片临时文件不存在，尝试重新下载: {local_path}")
+        except Exception as e:
+            logger.warning(f"[CollectImage] 获取图片本地路径失败，尝试重新下载: {e}")
+
+        image_url = msg.url or msg.file or ""
+        if image_url.startswith("file://"):
+            parsed_file_url = urlparse(image_url)
+            file_path = unquote(parsed_file_url.path)
+            if os.path.exists(file_path):
+                return self._copy_to_owned_temp(file_path)
+        if image_url and os.path.exists(image_url):
+            return self._copy_to_owned_temp(os.path.abspath(image_url))
+        if not image_url.startswith(("http://", "https://")):
+            return None, None
+        if not self._is_safe_url(image_url):
+            logger.warning(f"[CollectImage] 不安全的图片URL，跳过下载: {image_url}")
+            return None, None
+
+        suffix = os.path.splitext(image_url.split("?", 1)[0])[1] or ".jpg"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(image_url) as resp:
+                    if resp.status != 200:
+                        logger.error(f"[CollectImage] 重新下载图片失败: {resp.status}")
+                        os.remove(tmp_path)
+                        return None, None
+                    with open(tmp_path, "wb") as f:
+                        f.write(await resp.read())
+            return tmp_path, tmp_path
+        except Exception as e:
+            logger.error(f"[CollectImage] 重新下载图片异常: {e}")
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return None, None
+
+    def _copy_to_owned_temp(self, source_path: str) -> tuple[str, str]:
+        suffix = os.path.splitext(source_path)[1] or ".jpg"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+        shutil.copy(source_path, tmp_path)
+        return tmp_path, tmp_path
 
     def _is_safe_url(self, url: str) -> bool:
         """验证URL是否安全，防止SSRF攻击"""
@@ -299,7 +359,10 @@ class CollectImagePlugin(Star):
                     await self._reply_duplicate(event, group_id)
                     return
                 
-                if not self._check_image_size(tmp_path):
+                size_check = self._check_image_size(tmp_path)
+                if size_check is None:
+                    return
+                if not size_check:
                     logger.info("[CollectImage] 转发图片尺寸过小，跳过")
                     return
                 
@@ -536,7 +599,7 @@ class CollectImagePlugin(Star):
         except (TypeError, ValueError):
             return default
 
-    def _check_image_size(self, file_path: str) -> bool:
+    def _check_image_size(self, file_path: str) -> Optional[bool]:
         """检查图片尺寸，宽高阈值来自插件配置。"""
         min_width = self._get_positive_int_config('min_image_width', 600)
         min_height = self._get_positive_int_config('min_image_height', 600)
@@ -546,9 +609,12 @@ class CollectImagePlugin(Star):
                 if width < min_width or height < min_height:
                     return False
                 return True
+        except FileNotFoundError:
+            logger.warning(f"[CollectImage] 图片文件不存在，跳过: {file_path}")
+            return None
         except Exception as e:
             logger.warning(f"[CollectImage] 图片尺寸检查失败: {file_path}, {e}")
-            return False
+            return None
 
     def _is_sticker(self, img: Image, event: AstrMessageEvent | None = None, img_index: int = 0) -> bool:
         def is_emoji_summary(summary: object) -> bool:
@@ -732,17 +798,41 @@ class CollectImagePlugin(Star):
         if image_id and image_id in self._queued_image_ids:
             logger.info("[CollectImage] 图片已在队列中，跳过")
             return
+        if self._is_sticker(msg, event, img_index):
+            logger.info("[CollectImage] 跳过表情包")
+            return
+
         if image_id:
             self._queued_image_ids.add(image_id)
-        await self._image_queue.put({
-            'type': 'single',
-            'msg': msg,
-            'event': event,
-            'group_id': group_id,
-            'sender_id': sender_id,
-            'img_index': img_index,
-            'image_id': image_id,
-        })
+        local_path = None
+        cleanup_path = None
+        queued = False
+        try:
+            local_path, cleanup_path = await self._get_single_image_file_path(msg)
+            if not local_path:
+                logger.warning("[CollectImage] 无法获取图片本地文件，跳过")
+                return
+            original_image_ref = msg.url or msg.file or ""
+            image_url = original_image_ref if original_image_ref.startswith(("http://", "https://")) else local_path
+            await self._image_queue.put({
+                'type': 'single',
+                'local_path': local_path,
+                'cleanup_path': cleanup_path,
+                'image_url': image_url,
+                'event': event,
+                'group_id': group_id,
+                'sender_id': sender_id,
+                'image_id': image_id,
+            })
+            queued = True
+        finally:
+            if image_id and not queued:
+                self._queued_image_ids.discard(image_id)
+            if cleanup_path and not queued and os.path.exists(cleanup_path):
+                try:
+                    os.remove(cleanup_path)
+                except OSError as e:
+                    logger.debug(f"[CollectImage] 清理未入队临时图片失败: {cleanup_path}, {e}")
 
     async def _llm_generate_with_retry(self, provider_id: str, prompt: str, image_urls: list, max_retries: int = 2) -> str:
         """带重试逻辑的 LLM 调用"""
@@ -831,7 +921,7 @@ class CollectImagePlugin(Star):
                 "description": ""
             }
 
-    async def recognize_character(self, image_url: str, image_base64: str = None) -> dict:
+    async def recognize_character(self, image_url: Optional[str] = None, image_base64: Optional[str] = None) -> dict:
         """调用 AnimeTrace API 识别角色，返回完整结果"""
         try:
             async with aiohttp.ClientSession() as session:
@@ -840,8 +930,11 @@ class CollectImagePlugin(Star):
                 # 优先使用 base64，其次使用 url
                 if image_base64:
                     form.add_field('base64', image_base64)
-                else:
+                elif image_url:
                     form.add_field('url', image_url)
+                else:
+                    logger.error("[CollectImage] 角色识别缺少图片输入")
+                    return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
                 
                 form.add_field('model', 'animetrace_high_beta')
                 form.add_field('is_multi', '1')

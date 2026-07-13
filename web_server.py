@@ -3,6 +3,7 @@ import concurrent.futures
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -17,6 +18,31 @@ from PIL import Image
 
 from astrbot.api import logger
 from astrbot.api.star import StarTools
+
+
+class WebUILogHandler(logging.Handler):
+    def __init__(self, append_log):
+        super().__init__(level=logging.INFO)
+        self.append_log = append_log
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if "[CollectImage" not in record.getMessage():
+                return
+            created = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created))
+            millis = int(record.msecs)
+            plugin_tag = getattr(record, "plugin_tag", "[Plug]")
+            short_level = getattr(record, "short_levelname", record.levelname[:4].upper())
+            version_tag = getattr(record, "astrbot_version_tag", "")
+            source_file = getattr(record, "source_file", record.module)
+            source_line = getattr(record, "source_line", record.lineno)
+            line = (
+                f"[{created}.{millis:03d}] {plugin_tag} [{short_level}]"
+                f"{version_tag} [{source_file}:{source_line}]: {record.getMessage()}"
+            )
+            self.append_log(line)
+        except Exception:
+            self.handleError(record)
 
 
 # 缩略图默认配置（可被配置覆盖）
@@ -97,6 +123,7 @@ class WebServer:
         self._logs: deque[dict[str, Any]] = deque(maxlen=1000)
         self._log_seq = 0
         self._log_sink_id = None
+        self._log_handler: Optional[logging.Handler] = None
         self._log_lock = threading.Lock()
         
         self._import_state = {
@@ -122,6 +149,10 @@ class WebServer:
                     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
                     filter=only_collectimage,
                 )
+                return
+
+            self._log_handler = WebUILogHandler(self._append_log)
+            logger.addHandler(self._log_handler)
         except Exception as e:
             logger.warning(f"[CollectImage WebUI] 日志捕获初始化失败: {e}")
 
@@ -133,6 +164,20 @@ class WebServer:
         with self._log_lock:
             self._log_seq += 1
             self._logs.append({"seq": self._log_seq, "line": line})
+
+    def _teardown_log_capture(self):
+        if self._log_sink_id is not None and hasattr(logger, "remove"):
+            try:
+                logger.remove(self._log_sink_id)
+            except Exception as e:
+                logger.debug(f"[CollectImage WebUI] 移除日志 sink 失败: {e}")
+            self._log_sink_id = None
+        if self._log_handler is not None:
+            try:
+                logger.removeHandler(self._log_handler)
+            except Exception as e:
+                logger.debug(f"[CollectImage WebUI] 移除日志 handler 失败: {e}")
+            self._log_handler = None
 
     @staticmethod
     def _sanitize_log_line(line: str) -> str:
@@ -1042,20 +1087,17 @@ class WebServer:
         logger.info(f"[CollectImage] WebUI 已启动: http://{self.host}:{self.port}, 图片目录: {self.images_dir}")
 
     async def stop(self):
-        if not self._started:
-            return
         if self.site:
             await self.site.stop()
+            self.site = None
         if self.runner:
             await self.runner.cleanup()
+            self.runner = None
+        was_started = self._started
         self._started = False
         # 关闭线程池执行器
         if hasattr(self, '_executor') and self._executor:
             self._executor.shutdown(wait=False)
-        if self._log_sink_id is not None and hasattr(logger, "remove"):
-            try:
-                logger.remove(self._log_sink_id)
-            except Exception:
-                pass
-            self._log_sink_id = None
-        logger.info("[CollectImage] WebUI 已停止")
+        self._teardown_log_capture()
+        if was_started:
+            logger.info("[CollectImage] WebUI 已停止")
