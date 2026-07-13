@@ -157,9 +157,9 @@
         </div>
 
         <!-- 主页面 -->
-        <div id="main-page" class="hidden min-h-screen">
+        <div id="main-page" class="hidden h-screen flex flex-col">
             <!-- Header -->
-            <header class="glass-card shadow-sm sticky top-0 z-40">
+            <header class="glass-card shadow-sm z-40 flex-shrink-0">
                 <div class="mx-auto px-4 lg:px-8 py-3 md:py-4">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center space-x-3">
@@ -178,9 +178,9 @@
                 </div>
             </header>
 
-            <div class="mx-auto px-4 lg:px-8 py-4 md:py-6">
+            <div class="mx-auto px-4 lg:px-8 pt-3 md:pt-4 flex-1 flex flex-col overflow-hidden w-full">
                 <!-- 顶部导航 -->
-                <div class="flex gap-2 mb-4 md:mb-6 overflow-x-auto">
+                <div class="flex gap-2 mb-3 md:mb-4 overflow-x-auto flex-shrink-0">
                     <button class="tab-btn active px-3 md:px-4 py-2 rounded-lg bg-purple-100 text-purple-700 font-medium whitespace-nowrap text-sm md:text-base" data-tab="images">
                         <i data-lucide="images" class="w-4 h-4 inline mr-1"></i>图片管理
                     </button>
@@ -190,12 +190,15 @@
                     <button class="tab-btn px-3 md:px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600 whitespace-nowrap text-sm md:text-base" data-tab="config">
                         <i data-lucide="settings" class="w-4 h-4 inline mr-1"></i>插件配置
                     </button>
+                    <button class="tab-btn px-3 md:px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600 whitespace-nowrap text-sm md:text-base" data-tab="logs">
+                        <i data-lucide="scroll-text" class="w-4 h-4 inline mr-1"></i>插件日志
+                    </button>
                 </div>
 
-                <div class="flex flex-col md:flex-row gap-4 md:gap-6">
+                <div class="flex flex-col md:flex-row gap-3 md:gap-6 flex-1 overflow-hidden">
                     <!-- 侧边栏: 移动端水平滚动，桌面端垂直固定 -->
                     <aside id="sidebar" class="flex-shrink-0 md:w-48">
-                        <div class="glass-card rounded-xl p-2 md:p-4 md:sticky md:top-24">
+                        <div class="glass-card rounded-xl p-2 md:p-4">
                             <div class="flex md:flex-col gap-1 md:gap-2 overflow-x-auto md:overflow-visible">
                                 <button class="sidebar-item active flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="all">
                                     <i data-lucide="images" class="w-4 h-4 md:w-5 md:h-5 text-purple-500 shrink-0"></i>
@@ -218,19 +221,20 @@
                     </aside>
 
                     <!-- 主内容 -->
-                    <main class="flex-1 min-w-0">
+                    <main class="flex-1 min-w-0 flex flex-col overflow-hidden">
                         <!-- 图片管理内容 -->
-                        <div id="tab-images" class="tab-content">
+                        <div id="tab-images" class="tab-content flex flex-col overflow-hidden flex-1">
                             <!-- 搜索栏 -->
-                            <div class="glass-card rounded-xl p-4 mb-6">
-                                <div class="flex flex-wrap gap-3">
+                            <div class="glass-card rounded-xl p-3 md:p-4 mb-3 md:mb-4 flex-shrink-0">
+                                <div class="flex flex-wrap gap-2 md:gap-3">
                                     <input type="text" id="search-keyword" placeholder="搜索角色/作品/标签..." 
                                         class="flex-1 min-w-0 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition">
                                     <button id="search-btn" class="btn-primary px-6 py-2 rounded-lg font-medium">
                                         <i data-lucide="search" class="w-4 h-4 inline mr-1"></i>搜索
                                     </button>
-                                    <button id="clear-search-btn" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
-                                        清除
+                                    <button id="import-btn" class="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg font-medium shadow hover:shadow-lg transition flex items-center gap-1">
+                                        <i data-lucide="upload" class="w-4 h-4"></i>
+                                        <span class="hidden sm:inline">导入</span>
                                     </button>
                                 </div>
                             </div>
@@ -263,14 +267,8 @@
                             </div>
 
                             <!-- 图片列表 -->
-                            <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 md:gap-4"></div>
-                            
-                            <!-- 导入按钮 -->
-                            <div class="mt-4 flex justify-center">
-                                <button id="import-btn" class="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transition flex items-center gap-2">
-                                    <i data-lucide="upload" class="w-5 h-5"></i>
-                                    从文件导入图片
-                                </button>
+                            <div id="grid-wrapper" class="flex-1 overflow-hidden min-h-0">
+                                <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 md:gap-4 h-full content-start"></div>
                             </div>
                             
                             <!-- 导入弹窗 -->
@@ -299,7 +297,7 @@
                             </div>
                             
                             <!-- 翻页 -->
-                            <div class="mt-6 flex items-center justify-center gap-1 sm:gap-2">
+                            <div class="py-2 md:py-3 flex items-center justify-center gap-1 sm:gap-2 flex-shrink-0">
                                 <button id="first-page" class="hidden sm:block p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="首页">
                                     <i data-lucide="chevrons-left" class="w-5 h-5"></i>
                                 </button>
@@ -325,7 +323,7 @@
                         </div>
 
                         <!-- 别名管理 -->
-                        <div id="tab-aliases" class="tab-content hidden">
+                        <div id="tab-aliases" class="tab-content hidden flex-1 overflow-y-auto">
                             <div class="glass-card rounded-xl p-3 md:p-4 mb-4">
                                 <div class="flex flex-wrap gap-2 md:gap-3 items-center">
                                     <input type="text" id="search-alias" placeholder="搜索别名..." 
@@ -375,7 +373,7 @@
                         </div>
 
                         <!-- 统计 -->
-                        <div id="tab-stats" class="tab-content hidden">
+                        <div id="tab-stats" class="tab-content hidden flex-1 overflow-y-auto">
                             <div class="glass-card rounded-xl p-6">
                                 <div class="flex items-center justify-between mb-6">
                                     <h2 class="text-xl font-bold text-gray-800">图片统计</h2>
@@ -417,7 +415,7 @@
                         </div>
 
                         <!-- 插件配置 -->
-                        <div id="tab-config" class="tab-content hidden">
+                        <div id="tab-config" class="tab-content hidden flex-1 overflow-y-auto">
                             <div class="glass-card rounded-xl p-6">
                                 <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 mb-6">
                                     <div>
@@ -440,6 +438,23 @@
                                         <span>加载配置中...</span>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- 插件日志 -->
+                        <div id="tab-logs" class="tab-content hidden flex-1 overflow-hidden">
+                            <div class="glass-card rounded-xl p-4 md:p-6 h-full flex flex-col">
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 flex-shrink-0">
+                                    <div>
+                                        <h2 class="text-xl font-bold text-gray-800">插件日志</h2>
+                                        <p class="text-gray-500 text-sm mt-1">实时刷新 CollectImage 相关日志，便于观察收图、分析和 WebUI 操作状态</p>
+                                    </div>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-gray-600">
+                                        <input type="checkbox" id="log-auto-scroll" checked class="w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400">
+                                        自动滚动
+                                    </label>
+                                </div>
+                                <pre id="log-output" class="flex-1 min-h-0 overflow-y-auto bg-gray-950 text-green-100 rounded-xl p-4 text-xs md:text-sm leading-6 whitespace-pre-wrap font-mono"></pre>
                             </div>
                         </div>
                     </main>

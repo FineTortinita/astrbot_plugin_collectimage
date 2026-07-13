@@ -9,6 +9,42 @@ let isSearchMode = false;
 let currentSearchKeyword = '';
 let detailModal = null;
 let loginPage, mainPage, loginForm, loginError, imageGrid, imageCount;
+let _resizeTimer = null;
+let logPollTimer = null;
+let logCursor = 0;
+const MAX_LOG_LINES = 1000;
+
+function getGridCols() {
+    const sw = window.innerWidth;
+    return sw >= 1536 ? 6 : sw >= 1280 ? 5 : sw >= 1024 ? 4 : sw >= 640 ? 3 : 2;
+}
+
+function calculatePageSize() {
+    const cols = getGridCols();
+    const wrapper = document.getElementById('grid-wrapper');
+    if (!wrapper || wrapper.clientHeight < 50 || wrapper.clientWidth < 50) return cols * 4;
+
+    const gap = window.innerWidth >= 768 ? 16 : 12;
+    const colW = (wrapper.clientWidth - (cols - 1) * gap) / cols;
+    const cardH = colW + 70;
+    const rows = Math.max(1, Math.floor((wrapper.clientHeight + gap) / (cardH + gap)));
+    return rows * cols;
+}
+
+window.addEventListener('resize', () => {
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+        const tab = document.getElementById('tab-images');
+        if (tab && !tab.classList.contains('hidden')) {
+            const n = calculatePageSize();
+            if (n !== pageSize) {
+                pageSize = n;
+                currentPage = 0;
+                loadImages();
+            }
+        }
+    }, 250);
+});
 
 // Toast 通知函数
 function showToast(message, type = 'success') {
@@ -128,6 +164,7 @@ function bindEventListeners() {
     if (logoutBtn) {
         logoutBtn.addEventListener('click', async () => {
             await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
+            stopLogPolling();
             showLoginPage();
         });
     }
@@ -136,26 +173,15 @@ function bindEventListeners() {
     const searchBtn = document.getElementById('search-btn');
     if (searchBtn) {
         searchBtn.addEventListener('click', () => {
-            const keyword = document.getElementById('search-keyword')?.value || '';
+            const keyword = document.getElementById('search-keyword')?.value?.trim() || '';
             if (keyword) {
                 searchImagesWithAlias(keyword);
             } else {
                 currentPage = 0;
+                isSearchMode = false;
+                currentSearchKeyword = '';
                 loadImages();
             }
-        });
-    }
-
-    // 清除搜索
-    const clearSearchBtn = document.getElementById('clear-search-btn');
-    if (clearSearchBtn) {
-        clearSearchBtn.addEventListener('click', () => {
-            const keywordInput = document.getElementById('search-keyword');
-            if (keywordInput) keywordInput.value = '';
-            currentPage = 0;
-            isSearchMode = false;
-            currentSearchKeyword = '';
-            loadImages();
         });
     }
 
@@ -164,11 +190,13 @@ function bindEventListeners() {
     if (keywordInput) {
         keywordInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                const keyword = keywordInput.value || '';
+                const keyword = keywordInput.value?.trim() || '';
                 if (keyword) {
                     searchImagesWithAlias(keyword);
                 } else {
                     currentPage = 0;
+                    isSearchMode = false;
+                    currentSearchKeyword = '';
                     loadImages();
                 }
             }
@@ -484,6 +512,11 @@ function bindEventListeners() {
                     sidebar.classList.add('hidden');
                 }
             }
+            if (tabName === 'logs') {
+                startLogPolling(true);
+            } else {
+                stopLogPolling();
+            }
             
             if (tabName === 'aliases') {
                 aliasCurrentPage = 1;
@@ -498,6 +531,15 @@ function bindEventListeners() {
             }
         });
     });
+
+    const logAutoScroll = document.getElementById('log-auto-scroll');
+    if (logAutoScroll) {
+        logAutoScroll.addEventListener('change', () => {
+            if (logAutoScroll.checked) {
+                scrollLogsToBottom();
+            }
+        });
+    }
 
     // 别名分页
     const aliasPrevBtn = document.getElementById('alias-prev-page');
@@ -840,6 +882,66 @@ function bindEventListeners() {
     }
 }
 
+function scrollLogsToBottom() {
+    const output = document.getElementById('log-output');
+    if (output) {
+        output.scrollTop = output.scrollHeight;
+    }
+}
+
+async function loadLogs(reset = false) {
+    const output = document.getElementById('log-output');
+    if (!output) return;
+
+    if (reset) {
+        logCursor = 0;
+        output.textContent = '';
+    }
+
+    const params = new URLSearchParams();
+    params.append('limit', reset ? '300' : '200');
+    if (logCursor > 0) {
+        params.append('since', String(logCursor));
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/logs?${params}`);
+        const data = await response.json();
+        if (!data.success) return;
+
+        const logs = Array.isArray(data.logs) ? data.logs : [];
+        if (logs.length > 0) {
+            const appended = logs.map(item => item.line).join('\n');
+            output.textContent += output.textContent ? `\n${appended}` : appended;
+            const lines = output.textContent.split('\n');
+            if (lines.length > MAX_LOG_LINES) {
+                output.textContent = lines.slice(-MAX_LOG_LINES).join('\n');
+            }
+        }
+        logCursor = data.next || logCursor;
+
+        const autoScroll = document.getElementById('log-auto-scroll');
+        if (!autoScroll || autoScroll.checked) {
+            scrollLogsToBottom();
+        }
+    } catch (e) {
+        console.error('加载日志失败:', e);
+    }
+}
+
+function startLogPolling(reset = false) {
+    stopLogPolling();
+    loadLogs(reset);
+    logPollTimer = setInterval(() => loadLogs(false), 2000);
+}
+
+function stopLogPolling() {
+    if (logPollTimer) {
+        clearInterval(logPollTimer);
+        logPollTimer = null;
+    }
+}
+
 // 检查登录状态
 async function checkAuth() {
     console.log('Checking auth...');
@@ -877,11 +979,10 @@ async function cleanupMissingFiles() {
     }
 }
 
-// 加载图片列表
 async function loadImages() {
+    pageSize = calculatePageSize();
     const params = new URLSearchParams();
     
-    // 侧边栏筛选
     if (currentFilter === 'confirmed') {
         params.append('confirmed', '1');
     } else if (currentFilter === 'unconfirmed') {

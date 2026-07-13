@@ -4,8 +4,11 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
@@ -91,6 +94,10 @@ class WebServer:
         self.ATTEMPT_WINDOW = 300  # 5分钟内
         
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self._logs: deque[dict[str, Any]] = deque(maxlen=1000)
+        self._log_seq = 0
+        self._log_sink_id = None
+        self._log_lock = threading.Lock()
         
         self._import_state = {
             "running": False,
@@ -99,7 +106,54 @@ class WebServer:
             "stop_requested": False
         }
 
+        self._setup_log_capture()
         self._setup_routes()
+
+    def _setup_log_capture(self):
+        def only_collectimage(record: dict[str, Any]) -> bool:
+            message = record.get("message", "")
+            return "[CollectImage" in message
+
+        try:
+            if hasattr(logger, "add"):
+                self._log_sink_id = logger.add(
+                    self._append_log,
+                    level="INFO",
+                    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+                    filter=only_collectimage,
+                )
+        except Exception as e:
+            logger.warning(f"[CollectImage WebUI] 日志捕获初始化失败: {e}")
+
+    def _append_log(self, message: Any):
+        line = self._sanitize_log_line(str(message).rstrip())
+        if not line:
+            return
+
+        with self._log_lock:
+            self._log_seq += 1
+            self._logs.append({"seq": self._log_seq, "line": line})
+
+    @staticmethod
+    def _sanitize_log_line(line: str) -> str:
+        """隐藏 WebUI 日志中容易泄露的消息载荷、URL 和本地路径。"""
+        sensitive_prefixes = (
+            "get_forward_msg 返回:",
+            "节点消息内容:",
+            "消息链:",
+        )
+        for prefix in sensitive_prefixes:
+            marker = f"[CollectImage] {prefix}"
+            if marker in line:
+                return line.split(marker, 1)[0] + marker + " [已隐藏敏感内容]"
+
+        line = re.sub(r"https?://[^\s\]'>\"}）)]+", "[URL]", line)
+        line = re.sub(
+            r"(?<!\w)(?:[A-Za-z]:)?[/\\][^\s|,，]+",
+            "[PATH]",
+            line,
+        )
+        return line
 
     def _setup_routes(self):
         self.app.router.add_post("/api/auth/login", self.handle_login)
@@ -124,6 +178,7 @@ class WebServer:
 
         self.app.router.add_post("/api/maintenance/cleanup", self.handle_cleanup)
         self.app.router.add_get("/api/stats", self.handle_get_stats)
+        self.app.router.add_get("/api/logs", self.handle_get_logs)
         self.app.router.add_get("/api/health", self.handle_health_check)
 
         # 配置管理
@@ -145,7 +200,7 @@ class WebServer:
         self.app.router.add_get("/images/{path:.*}", self.handle_images_static)
 
     @staticmethod
-    def _ok(data: dict = None, **kwargs) -> web.Response:
+    def _ok(data: Optional[dict] = None, **kwargs) -> web.Response:
         body = {"success": True}
         if data:
             body.update(data)
@@ -588,6 +643,30 @@ class WebServer:
     async def handle_health_check(self, request: web.Request) -> web.Response:
         return self._ok({"status": "ok"})
 
+    async def handle_get_logs(self, request: web.Request) -> web.Response:
+        try:
+            since = self._safe_int(request.query.get("since"), 0)
+            limit = self._safe_int(request.query.get("limit"), 200)
+            limit = max(1, min(limit, 1000))
+
+            with self._log_lock:
+                snapshot = list(self._logs)
+                current_seq = self._log_seq
+
+            if since > 0:
+                entries = [item for item in snapshot if item["seq"] > since]
+            else:
+                entries = snapshot[-limit:]
+
+            if len(entries) > limit:
+                entries = entries[-limit:]
+
+            next_seq = entries[-1]["seq"] if entries else current_seq
+            return self._ok({"logs": entries, "next": next_seq})
+        except Exception as e:
+            logger.error(f"[CollectImage WebUI] 获取日志失败: {e}")
+            return self._err(str(e))
+
     async def handle_upload_image(self, request: web.Request) -> web.Response:
         image_path = None
         try:
@@ -632,13 +711,6 @@ class WebServer:
                 os.remove(image_path)
                 return self._err("图片已存在（重复上传）")
             
-            phash = self.plugin._calculate_phash(image_path)
-            if phash:
-                similar = self.plugin.db.find_similar_phash(phash)
-                if similar:
-                    os.remove(image_path)
-                    return self._err(f"发现相似图片（感知哈希匹配，已有图片 id={similar['id']}）")
-            
             # Step 5: 分析 - AnimeTrace 角色识别
             char_result = await self.plugin.recognize_character_from_file(image_path)
             all_results = char_result.get("all_results", [])
@@ -663,7 +735,7 @@ class WebServer:
                 'ai_detect': ai_detect,
                 'confirmed': confirmed,
                 'created_at': timestamp,
-                'phash': phash,
+                'phash': None,
             }
             
             if not self.plugin.db.add_image(image_data):
@@ -980,4 +1052,10 @@ class WebServer:
         # 关闭线程池执行器
         if hasattr(self, '_executor') and self._executor:
             self._executor.shutdown(wait=False)
+        if self._log_sink_id is not None and hasattr(logger, "remove"):
+            try:
+                logger.remove(self._log_sink_id)
+            except Exception:
+                pass
+            self._log_sink_id = None
         logger.info("[CollectImage] WebUI 已停止")
