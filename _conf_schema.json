@@ -2,7 +2,7 @@
   "allowed_groups": {
     "description": "允许收集图片的群号列表，白名单模式。仅处理此列表中的群消息；若为空，插件不处理任何群组。",
     "type": "list",
-    "default": [""]
+    "default": []
   },
   "webui_enabled": {
     "description": "是否启用 WebUI 管理界面。启用后可通过浏览器访问管理界面，支持图片浏览、编辑、搜索、别名管理等功能。",
@@ -14,10 +14,15 @@
     "type": "int",
     "default": 9192
   },
-  "webui_password": {
-    "description": "WebUI 访问密码。首次使用后请立即修改默认密码。建议使用字母+数字+特殊字符的组合，长度 8 位以上。",
+  "webui_host": {
+    "description": "WebUI 监听地址。默认仅监听本机；确需局域网访问时再改为 0.0.0.0，并使用反向代理和 HTTPS。",
     "type": "string",
-    "default": "admin123"
+    "default": "127.0.0.1"
+  },
+  "webui_password": {
+    "description": "WebUI 访问密码。启用 WebUI 前必须设置非默认密码，建议使用字母、数字和特殊字符且长度至少 8 位。",
+    "type": "string",
+    "default": ""
   },
   "filter_prompt": {
     "description": "AI 图片筛选提示词，决定哪些图片被认为是有效的绘画素材。修改此配置可调整图片筛选的严格程度。建议保留默认值，除非你有特殊需求。",
@@ -43,6 +48,16 @@
     "description": "触发图片压缩的文件大小阈值（MB）。超过此大小的图片会被等比例压缩后再发送到 AnimeTrace API，避免 413 错误。推荐值：2MB。如果经常遇到 413 错误可降低此值。",
     "type": "int",
     "default": 2
+  },
+  "max_download_size_mb": {
+    "description": "自动收集和 WebUI 上传允许的最大图片文件大小（MB），下载过程中会流式强制限制。",
+    "type": "int",
+    "default": 10
+  },
+  "max_image_pixels": {
+    "description": "允许处理的最大图片像素总数，用于防止解压缩炸弹。默认 4000 万像素。",
+    "type": "int",
+    "default": 40000000
   },
   "max_image_dimension": {
     "description": "图片压缩后的最大边长（像素）。等比例缩放，保持原始比例不变形。推荐值：1500-2500px。过小可能导致识别精度下降，过大会增加 API 响应时间。",

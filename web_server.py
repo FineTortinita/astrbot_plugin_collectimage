@@ -314,8 +314,9 @@ class WebServer:
         
         # 只允许同源请求，或配置的可信来源
         allowed_origins = getattr(self.plugin.config, 'cors_origins', [])
-        if origin and (origin in allowed_origins or not allowed_origins):
+        if origin and origin in allowed_origins:
             response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Vary'] = 'Origin'
         elif not origin:
             # 同源请求没有Origin头
             pass
@@ -323,6 +324,17 @@ class WebServer:
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         response.headers['Access-Control-Allow-Credentials'] = 'false'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-eval' https://cdn.tailwindcss.com "
+            "https://cdn.jsdelivr.net https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: blob:; connect-src 'self'; "
+            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        )
         return response
 
     @web.middleware
@@ -362,7 +374,7 @@ class WebServer:
             if not expected_password:
                 return self._err("WebUI 密码未配置，请在插件配置中设置密码", 500)
             
-            if password == expected_password:
+            if secrets.compare_digest(str(password), str(expected_password)):
                 if client_ip in self._login_attempts:
                     del self._login_attempts[client_ip]
                 
@@ -375,7 +387,7 @@ class WebServer:
                     path="/",
                     httponly=True,
                     max_age=self.SESSION_TIMEOUT,
-                    samesite="Lax"
+                    samesite="Strict"
                 )
                 return response
             
@@ -404,6 +416,11 @@ class WebServer:
         except (ValueError, TypeError):
             return default
 
+    @staticmethod
+    def _bounded_pagination(limit: int, offset: int, max_limit: int) -> tuple[int, int]:
+        max_limit = max(1, int(max_limit))
+        return max(1, min(int(limit), max_limit)), max(0, int(offset))
+
     async def handle_list_images(self, request: web.Request) -> web.Response:
         tag = request.query.get("tag")
         character = request.query.get("character")
@@ -414,9 +431,7 @@ class WebServer:
         limit = self._safe_int(request.query.get("limit"), max_limit)
         offset = self._safe_int(request.query.get("offset"), 0)
         
-        # 限制最大数量
-        if limit > max_limit:
-            limit = max_limit
+        limit, offset = self._bounded_pagination(limit, offset, max_limit)
         
         confirmed_val = None
         if confirmed is not None:
@@ -458,8 +473,7 @@ class WebServer:
         if not keyword:
             return self._err("关键词不能为空")
 
-        if limit > max_limit:
-            limit = max_limit
+        limit, offset = self._bounded_pagination(limit, offset, max_limit)
 
         confirmed_val = None
         if confirmed is not None:
@@ -491,21 +505,46 @@ class WebServer:
         return self._ok({"image": image})
 
     async def handle_update_image(self, request: web.Request) -> web.Response:
-        image_id = int(request.match_info["image_id"])
-        data = await request.json()
-        tags = data.get("tags")
-        character = data.get("character")
-        description = data.get("description")
-        
-        success = self.plugin.db.update_image(
-            image_id=image_id,
-            tags=tags,
-            character=character,
-            description=description,
-        )
-        if success:
-            return self._ok({"message": "更新成功"})
-        return self._err("更新失败")
+        try:
+            image_id = int(request.match_info["image_id"])
+            data = await request.json()
+            if not isinstance(data, dict):
+                return self._err("请求数据必须是对象", 400)
+
+            tags = data.get("tags")
+            if tags is not None:
+                tags = self.plugin._sanitize_tags(tags)
+
+            character = data.get("character")
+            if character is not None:
+                parsed = json.loads(character) if isinstance(character, str) else character
+                if not isinstance(parsed, list) or len(parsed) > 20:
+                    raise ValueError("角色数据格式错误")
+                clean_characters = []
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        raise ValueError("角色数据格式错误")
+                    name = str(item.get("name", "")).replace("\x00", "").strip()[:100]
+                    work = str(item.get("work", "")).replace("\x00", "").strip()[:100]
+                    if name:
+                        clean_characters.append({"name": name, "work": work})
+                character = json.dumps(clean_characters, ensure_ascii=False)
+
+            description = data.get("description")
+            if description is not None:
+                description = str(description).replace("\x00", "").strip()[:1000]
+
+            success = self.plugin.db.update_image(
+                image_id=image_id,
+                tags=tags,
+                character=character,
+                description=description,
+            )
+            if success:
+                return self._ok({"message": "更新成功"})
+            return self._err("更新失败")
+        except (ValueError, TypeError, json.JSONDecodeError) as e:
+            return self._err(str(e), 400)
 
     async def handle_delete_image(self, request: web.Request) -> web.Response:
         image_id = int(request.match_info["image_id"])
@@ -718,7 +757,7 @@ class WebServer:
             # Step 1: 接收 - 读取 multipart 数据
             reader = await request.multipart()
             field = await reader.next()
-            if field.name != 'file':
+            if field is None or field.name != 'file' or not field.filename:
                 return self._err("无效的文件字段")
             
             # Step 2: 校验 - 文件格式
@@ -728,14 +767,16 @@ class WebServer:
             
             # Step 3: 流式写入 + hash 计算
             timestamp = int(time.time())
-            ext = os.path.splitext(filename)[1] or '.jpg'
-            image_filename = f"{timestamp}_webui_upload{ext}"
-            image_path = os.path.join(self.plugin.images_dir, image_filename)
+            temp_filename = f".upload_{secrets.token_hex(16)}.tmp"
+            image_path = os.path.join(self.plugin.images_dir, temp_filename)
             
             hasher = hashlib.md5()
             file_size = 0
             
-            with open(image_path, 'wb') as f:
+            max_file_size = int(getattr(self.plugin.config, 'max_download_size_mb', 10)) * 1024 * 1024
+            max_image_pixels = int(getattr(self.plugin.config, 'max_image_pixels', 40_000_000))
+
+            with open(image_path, 'xb') as f:
                 while True:
                     chunk = await field.read_chunk()
                     if not chunk:
@@ -744,17 +785,33 @@ class WebServer:
                     hasher.update(chunk)
                     file_size += len(chunk)
                     
-                    if file_size > 50 * 1024 * 1024:
-                        f.close()
-                        os.remove(image_path)
-                        return self._err("文件大小超过50MB限制")
+                    if file_size > max_file_size:
+                        raise ValueError("文件大小超过限制")
             
             file_hash = hasher.hexdigest()
             
             # Step 4: 去重 - 检查文件是否已存在
             if self.plugin.db.is_hash_exists(file_hash):
                 os.remove(image_path)
+                image_path = None
                 return self._err("图片已存在（重复上传）")
+
+            with Image.open(image_path) as image:
+                width, height = image.size
+                if width <= 0 or height <= 0 or width * height > max_image_pixels:
+                    raise ValueError("图片像素数量超过限制")
+                image.verify()
+
+            ext = self.plugin._detect_image_extension(image_path)
+            image_filename = self.plugin._make_image_filename(ext)
+            final_image_path = os.path.join(self.plugin.images_dir, image_filename)
+            temp_image_path = image_path
+            self.plugin._copy_image_exclusive(temp_image_path, final_image_path)
+            image_path = final_image_path
+            try:
+                os.remove(temp_image_path)
+            except OSError as e:
+                logger.warning(f"[CollectImage] 清理上传临时文件失败: {e}")
             
             # Step 5: 分析 - AnimeTrace 角色识别
             char_result = await self.plugin.recognize_character_from_file(image_path)
@@ -794,48 +851,128 @@ class WebServer:
                 "file_name": image_filename
             })
                 
+        except ValueError as e:
+            if image_path and os.path.exists(image_path):
+                os.remove(image_path)
+            return self._err(str(e), 400)
         except Exception as e:
             logger.error(f"[CollectImage] 文件上传失败: {e}")
             if image_path and os.path.exists(image_path):
                 os.remove(image_path)
             return self._err("上传失败")
 
+    @staticmethod
+    def _load_config_schema() -> dict:
+        schema_path = Path(__file__).with_name("_conf_schema.json")
+        with schema_path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+
+    @staticmethod
+    def _validate_config_value(key: str, value: Any, definition: dict) -> Any:
+        value_type = definition.get("type", "string")
+        if value_type == "bool":
+            if type(value) is not bool:
+                raise ValueError(f"{key} 必须是布尔值")
+        elif value_type == "int":
+            if type(value) is not int:
+                raise ValueError(f"{key} 必须是整数")
+            bounds = {
+                "webui_port": (1, 65535),
+                "jpeg_quality": (1, 100),
+                "duplicate_reply_probability": (0, 100),
+            }
+            minimum, maximum = bounds.get(key, (1, 1_000_000_000))
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{key} 超出允许范围")
+        elif value_type == "list":
+            if not isinstance(value, list):
+                raise ValueError(f"{key} 必须是列表")
+            value = [str(item).strip() for item in value if str(item).strip()]
+            if len(value) > 1000:
+                raise ValueError(f"{key} 列表过长")
+        elif value_type == "string":
+            if not isinstance(value, str):
+                raise ValueError(f"{key} 必须是字符串")
+            if len(value) > 20_000:
+                raise ValueError(f"{key} 内容过长")
+        else:
+            raise ValueError(f"不支持的配置类型: {value_type}")
+
+        if key == "webui_password" and (len(value) < 8 or value == "admin123"):
+            raise ValueError("WebUI 密码至少需要8位且不能使用默认密码")
+        return value
+
     async def handle_get_config(self, request: web.Request) -> web.Response:
         """获取当前配置"""
         try:
             config_dict = {}
             for key in self.plugin.config:
-                config_dict[key] = self.plugin.config.get(key)
+                if key != "webui_password":
+                    config_dict[key] = self.plugin.config.get(key)
+            config_dict["webui_password_set"] = bool(
+                self.plugin.config.get("webui_password")
+                and self.plugin.config.get("webui_password") != "admin123"
+            )
             return self._ok(config_dict)
         except Exception as e:
-            return self._err(str(e))
+            logger.error(f"[CollectImage] 读取配置失败: {e}")
+            return self._err("读取配置失败")
 
     async def handle_update_config(self, request: web.Request) -> web.Response:
         """更新配置"""
         try:
             data = await request.json()
-            
-            # 更新配置
+            if not isinstance(data, dict):
+                return self._err("配置数据必须是对象", 400)
+
+            schema = self._load_config_schema()
+            unknown_keys = set(data) - set(schema)
+            if unknown_keys:
+                return self._err(f"未知配置项: {', '.join(sorted(unknown_keys))}", 400)
+
+            updates = {}
             for key, value in data.items():
-                if key in self.plugin.config:
-                    self.plugin.config[key] = value
-            
-            return self._ok({"message": "配置已保存，插件将重启生效"})
+                if key == "webui_password" and value == "":
+                    continue
+                updates[key] = self._validate_config_value(key, value, schema[key])
+
+            candidate = dict(self.plugin.config)
+            candidate.update(updates)
+            if candidate.get("webui_enabled"):
+                password = str(candidate.get("webui_password", "") or "")
+                if len(password) < 8 or password == "admin123":
+                    return self._err("启用WebUI前必须设置非默认密码", 400)
+
+            old_config = dict(self.plugin.config)
+            try:
+                self.plugin.config.update(updates)
+                self.plugin.config.save_config()
+            except Exception:
+                self.plugin.config.clear()
+                self.plugin.config.update(old_config)
+                raise
+
+            password_changed = "webui_password" in updates
+            if password_changed:
+                self._sessions.clear()
+
+            return self._ok({
+                "message": "配置已保存，部分设置需重启插件生效",
+                "reauth_required": password_changed,
+            })
+        except ValueError as e:
+            return self._err(str(e), 400)
         except Exception as e:
             logger.error(f"[CollectImage] 保存配置失败: {e}")
-            return self._err(str(e))
+            return self._err("保存配置失败")
 
     async def handle_get_config_schema(self, request: web.Request) -> web.Response:
         """获取配置定义"""
         try:
-            schema_path = os.path.join(os.path.dirname(__file__), "_conf_schema.json")
-            if os.path.exists(schema_path):
-                with open(schema_path, "r", encoding="utf-8") as f:
-                    schema = json.load(f)
-                return self._ok(schema)
-            return self._err("配置定义文件不存在")
+            return self._ok(self._load_config_schema())
         except Exception as e:
-            return self._err(str(e))
+            logger.error(f"[CollectImage] 读取配置定义失败: {e}")
+            return self._err("读取配置定义失败")
 
     async def handle_index(self, request: web.Request) -> web.Response:
         index_file = self.static_dir / "index.html"
@@ -950,9 +1087,14 @@ class WebServer:
         
         try:
             data = await request.json()
-            alias_type = data.get("alias_type", "character")
-            original_name = data.get("original_name", "")
-            alias = data.get("alias", "")
+            alias_type = str(data.get("alias_type", "character")).strip()
+            original_name = str(data.get("original_name", "")).replace("\x00", "").strip()
+            alias = str(data.get("alias", "")).replace("\x00", "").strip()
+
+            if alias_type not in ("character", "work"):
+                return self._err("无效的别名类型", 400)
+            if len(original_name) > 100 or len(alias) > 100:
+                return self._err("别名内容过长", 400)
             
             if not original_name or not alias:
                 return self._err("缺少必要参数")
