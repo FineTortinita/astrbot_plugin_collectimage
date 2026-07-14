@@ -122,6 +122,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 绑定所有事件
     bindEventListeners();
+    lucide.createIcons();
     
     await checkAuth();
 });
@@ -801,16 +802,20 @@ function bindEventListeners() {
         selectedFiles = [...selectedFiles, ...files];
         if (fileList) {
             fileList.classList.remove('hidden');
-            fileList.innerHTML = selectedFiles.map((f, i) => `
-                <div class="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                    <span class="text-sm text-gray-700 truncate">${f.name}</span>
-                    <button class="remove-file text-red-500 hover:text-red-700" data-index="${i}">
-                        <i data-lucide="x" class="w-4 h-4"></i>
-                    </button>
-                </div>
-            `).join('');
-            lucide.createIcons();
-            fileList.querySelectorAll('.remove-file').forEach(btn => {
+            fileList.replaceChildren();
+            selectedFiles.forEach((file, index) => {
+                const row = document.createElement('div');
+                row.className = 'flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2';
+
+                const name = document.createElement('span');
+                name.className = 'text-sm text-gray-700 truncate';
+                name.textContent = file.name;
+
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'remove-file text-red-500 hover:text-red-700';
+                btn.dataset.index = String(index);
+                btn.innerHTML = '<i data-lucide="x" class="w-4 h-4"></i>';
                 btn.addEventListener('click', () => {
                     const idx = parseInt(btn.dataset.index);
                     selectedFiles.splice(idx, 1);
@@ -818,7 +823,11 @@ function bindEventListeners() {
                     addFilesToList([]);
                     if (selectedFiles.length === 0 && fileList) fileList.classList.add('hidden');
                 });
+
+                row.append(name, btn);
+                fileList.appendChild(row);
             });
+            lucide.createIcons();
         }
     }
 
@@ -1074,25 +1083,42 @@ function renderImages(images) {
             }
         }
         
-        card.innerHTML = `
-            <div class="absolute top-2 left-2 z-10">
-                <input type="checkbox" class="image-checkbox w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400 cursor-pointer" data-filename="${img.file_name}">
-            </div>
-            <div class="aspect-square overflow-hidden bg-gray-100">
-                <img src="${API_BASE}/images/${img.file_name}?size=thumb" alt="${img.file_name}" loading="lazy" class="w-full h-full object-cover">
-            </div>
-            <div class="p-3">
-                <div class="flex items-center justify-between gap-2 mb-1">
-                    <div class="font-medium text-sm text-gray-800 truncate flex-1">${characterText}</div>
-                    <span class="confirm-badge ${img.confirmed ? 'confirmed' : 'unconfirmed'}" title="${img.confirmed ? '已确认' : '未确认'}">
-                        ${img.confirmed ? '✓' : '⚠'}
-                    </span>
-                </div>
-            <div class="text-xs text-gray-500 truncate">${tagsText || '无标签'}</div>
-            </div>
-        `;
-        
-        const checkbox = card.querySelector('.image-checkbox');
+        const checkboxWrap = document.createElement('div');
+        checkboxWrap.className = 'absolute top-2 left-2 z-10';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'image-checkbox w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400 cursor-pointer';
+        checkbox.dataset.filename = String(img.file_name || '');
+        checkboxWrap.appendChild(checkbox);
+
+        const imageWrap = document.createElement('div');
+        imageWrap.className = 'aspect-square overflow-hidden bg-gray-100';
+        const image = document.createElement('img');
+        image.src = `${API_BASE}/images/${encodeURIComponent(String(img.file_name || ''))}?size=thumb`;
+        image.alt = String(img.file_name || '');
+        image.loading = 'lazy';
+        image.className = 'w-full h-full object-cover';
+        imageWrap.appendChild(image);
+
+        const content = document.createElement('div');
+        content.className = 'p-3';
+        const heading = document.createElement('div');
+        heading.className = 'flex items-center justify-between gap-2 mb-1';
+        const character = document.createElement('div');
+        character.className = 'font-medium text-sm text-gray-800 truncate flex-1';
+        character.textContent = String(characterText || '未知角色');
+        const badge = document.createElement('span');
+        badge.className = `confirm-badge ${img.confirmed ? 'confirmed' : 'unconfirmed'}`;
+        badge.title = img.confirmed ? '已确认' : '未确认';
+        badge.textContent = img.confirmed ? '✓' : '⚠';
+        heading.append(character, badge);
+
+        const tags = document.createElement('div');
+        tags.className = 'text-xs text-gray-500 truncate';
+        tags.textContent = String(tagsText || '无标签');
+        content.append(heading, tags);
+        card.append(checkboxWrap, imageWrap, content);
+
         checkbox.addEventListener('click', (e) => {
             e.stopPropagation();
             if (checkbox.checked) {
@@ -1349,7 +1375,10 @@ async function loadConfig() {
         const schemaData = await schemaRes.json();
         
         if (!configData.success || !schemaData.success) {
-            configForm.innerHTML = '<p class="text-red-500">加载配置失败</p>';
+            const error = document.createElement('p');
+            error.className = 'text-red-500';
+            error.textContent = '加载配置失败';
+            configForm.replaceChildren(error);
             return;
         }
         
@@ -1377,87 +1406,80 @@ async function loadConfig() {
         
     } catch (e) {
         console.error('加载配置失败:', e);
-        configForm.innerHTML = '<p class="text-red-500">加载配置失败: ' + e.message + '</p>';
+        const error = document.createElement('p');
+        error.className = 'text-red-500';
+        error.textContent = `加载配置失败: ${e.message}`;
+        configForm.replaceChildren(error);
     }
 }
 
 // 渲染配置表单
 function renderConfigForm(config, schema) {
     const configForm = document.getElementById('config-form');
-    let html = '';
-    
+    configForm.replaceChildren();
+
     for (const [key, def] of Object.entries(schema)) {
         const value = config[key] !== undefined ? config[key] : def.default;
         const description = def.description || '';
-        
-        // 跳过密码字段的显示（安全考虑）
-        if (key === 'webui_password') {
-            html += `
-                <div class="config-item">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
-                    <p class="text-xs text-gray-500 mb-2">${description}</p>
-                    <input type="password" id="config-${key}" value="${value}" 
-                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                </div>
-            `;
+        const item = document.createElement('div');
+        item.className = 'config-item';
+
+        if (def.type === 'bool') {
+            const wrapper = document.createElement('label');
+            wrapper.className = 'flex items-center gap-3 cursor-pointer';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.id = `config-${key}`;
+            input.checked = Boolean(value);
+            input.className = 'w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400';
+            const text = document.createElement('div');
+            const title = document.createElement('span');
+            title.className = 'text-sm font-medium text-gray-700';
+            title.textContent = key;
+            const help = document.createElement('p');
+            help.className = 'text-xs text-gray-500';
+            help.textContent = description;
+            text.append(title, help);
+            wrapper.append(input, text);
+            item.appendChild(wrapper);
+            configForm.appendChild(item);
             continue;
         }
-        
-        // 根据类型生成不同的输入控件
-        if (def.type === 'bool') {
-            html += `
-                <div class="config-item">
-                    <label class="flex items-center gap-3 cursor-pointer">
-                        <input type="checkbox" id="config-${key}" ${value ? 'checked' : ''} 
-                            class="w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400">
-                        <div>
-                            <span class="text-sm font-medium text-gray-700">${key}</span>
-                            <p class="text-xs text-gray-500">${description}</p>
-                        </div>
-                    </label>
-                </div>
-            `;
-        } else if (def.type === 'int') {
-            html += `
-                <div class="config-item">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
-                    <p class="text-xs text-gray-500 mb-2">${description}</p>
-                    <input type="number" id="config-${key}" value="${value}" 
-                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                </div>
-            `;
-        } else if (def.type === 'list') {
-            const listValue = Array.isArray(value) ? value.join(',') : '';
-            html += `
-                <div class="config-item">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
-                    <p class="text-xs text-gray-500 mb-2">${description}</p>
-                    <input type="text" id="config-${key}" value="${listValue}" placeholder="用逗号分隔多个值"
-                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                </div>
-            `;
-        } else if (key === 'filter_prompt') {
-            html += `
-                <div class="config-item">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
-                    <p class="text-xs text-gray-500 mb-2">${description}</p>
-                    <textarea id="config-${key}" rows="6" 
-                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none resize-none">${value}</textarea>
-                </div>
-            `;
+
+        const label = document.createElement('label');
+        label.className = 'block text-sm font-medium text-gray-700 mb-1';
+        label.htmlFor = `config-${key}`;
+        label.textContent = key;
+        const help = document.createElement('p');
+        help.className = 'text-xs text-gray-500 mb-2';
+        help.textContent = description;
+
+        let input;
+        if (key === 'filter_prompt') {
+            input = document.createElement('textarea');
+            input.rows = 6;
+            input.className = 'w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none resize-none';
         } else {
-            html += `
-                <div class="config-item">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">${key}</label>
-                    <p class="text-xs text-gray-500 mb-2">${description}</p>
-                    <input type="text" id="config-${key}" value="${value}" 
-                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                </div>
-            `;
+            input = document.createElement('input');
+            input.type = key === 'webui_password' ? 'password' : (def.type === 'int' ? 'number' : 'text');
+            input.className = 'w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none';
         }
+        input.id = `config-${key}`;
+
+        if (key === 'webui_password') {
+            input.value = '';
+            input.placeholder = config.webui_password_set ? '留空表示不修改密码' : '请输入至少8位的非默认密码';
+        } else if (def.type === 'list') {
+            input.value = Array.isArray(value) ? value.join(',') : '';
+            input.placeholder = '用逗号分隔多个值';
+        } else {
+            input.value = value === undefined || value === null ? '' : String(value);
+        }
+
+        item.append(label, help, input);
+        configForm.appendChild(item);
     }
-    
-    configForm.innerHTML = html;
+
     lucide.createIcons();
 }
 
@@ -1470,6 +1492,7 @@ async function saveConfig() {
     for (const [key, def] of Object.entries(configSchema)) {
         const input = document.getElementById(`config-${key}`);
         if (!input) continue;
+        if (key === 'webui_password' && input.value === '') continue;
         
         if (def.type === 'bool') {
             newConfig[key] = input.checked;
@@ -1555,7 +1578,7 @@ async function openDetail(imageId) {
         if (data.success) {
             const img = data.image;
             
-            document.getElementById('detail-image').src = `${API_BASE}/images/${img.file_name}`;
+            document.getElementById('detail-image').src = `${API_BASE}/images/${encodeURIComponent(String(img.file_name || ''))}`;
             document.getElementById('detail-filename').textContent = img.file_name;
             document.getElementById('detail-group').textContent = img.group_id;
             document.getElementById('detail-sender').textContent = img.sender_id;
@@ -1619,13 +1642,15 @@ function addCharacterRow(name = '', work = '') {
     const row = document.createElement('div');
     row.className = 'flex gap-2 items-center';
     row.innerHTML = `
-        <input type="text" class="char-name flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm" placeholder="角色名" value="${name || ''}">
-        <input type="text" class="work-input flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm" placeholder="作品名" value="${work || ''}">
+        <input type="text" class="char-name flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm" placeholder="角色名">
+        <input type="text" class="work-input flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm" placeholder="作品名">
         <button type="button" class="remove-char-btn p-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition">
             <i data-lucide="trash-2" class="w-4 h-4"></i>
         </button>
     `;
-    
+    row.querySelector('.char-name').value = String(name || '');
+    row.querySelector('.work-input').value = String(work || '');
+
     row.querySelector('.remove-char-btn').onclick = () => {
         container.removeChild(row);
     };
@@ -1717,18 +1742,27 @@ function renderAliases(aliases) {
         const item = document.createElement('div');
         item.className = 'flex items-center gap-3 p-3 bg-white/50 rounded-lg hover:bg-white/70 transition';
         item.innerHTML = `
-            <span class="px-2 py-1 text-xs font-medium rounded ${alias.alias_type === 'character' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}">
-                ${alias.alias_type === 'character' ? '角色' : '作品'}
-            </span>
-            <span class="flex-1 font-medium">${alias.original_name}</span>
+            <span class="alias-type px-2 py-1 text-xs font-medium rounded"></span>
+            <span class="alias-original flex-1 font-medium"></span>
             <i data-lucide="arrow-right" class="w-4 h-4 text-gray-400"></i>
-            <span class="flex-1 text-gray-600">${alias.alias}</span>
-            <button class="delete-alias-btn p-2 text-red-500 hover:bg-red-50 rounded-lg transition" data-id="${alias.id}">
+            <span class="alias-value flex-1 text-gray-600"></span>
+            <button class="delete-alias-btn p-2 text-red-500 hover:bg-red-50 rounded-lg transition">
                 <i data-lucide="trash-2" class="w-4 h-4"></i>
             </button>
         `;
-        
-        item.querySelector('.delete-alias-btn').addEventListener('click', async (e) => {
+
+        const typeBadge = item.querySelector('.alias-type');
+        const isCharacter = alias.alias_type === 'character';
+        typeBadge.classList.add(...(isCharacter
+            ? ['bg-blue-100', 'text-blue-700']
+            : ['bg-green-100', 'text-green-700']));
+        typeBadge.textContent = isCharacter ? '角色' : '作品';
+        item.querySelector('.alias-original').textContent = String(alias.original_name || '');
+        item.querySelector('.alias-value').textContent = String(alias.alias || '');
+        const deleteButton = item.querySelector('.delete-alias-btn');
+        deleteButton.dataset.id = String(alias.id);
+
+        deleteButton.addEventListener('click', async (e) => {
             if (!await showConfirm('删除别名', '确定要删除这个别名吗？')) return;
             
             const aliasId = e.currentTarget.dataset.id;

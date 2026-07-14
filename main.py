@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import random
@@ -11,9 +12,11 @@ import time
 import uuid
 from io import BytesIO
 from typing import Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
+from aiohttp.abc import AbstractResolver
+from aiohttp.resolver import DefaultResolver
 from PIL import Image as PILImage
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
@@ -22,6 +25,38 @@ from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core.message.components import Image, Forward
 
 from .database import Database
+
+
+def _is_public_ip(address: str) -> bool:
+    """Only allow globally routable addresses for remote image downloads."""
+    try:
+        return ipaddress.ip_address(address).is_global
+    except ValueError:
+        return False
+
+
+def _normalize_allowed_groups(values: object) -> set[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {str(item).strip() for item in values if str(item).strip()}
+
+
+class PublicOnlyResolver(AbstractResolver):
+    """Resolve hosts once and reject DNS answers containing non-public IPs."""
+
+    def __init__(self, resolver=None):
+        self._resolver = resolver or DefaultResolver()
+
+    async def resolve(self, host: str, port: int = 0, family: int = 0):
+        records = await self._resolver.resolve(host, port, family)
+        if not records:
+            raise OSError(f"无法解析远程主机: {host}")
+        if any(not _is_public_ip(record["host"]) for record in records):
+            raise OSError(f"远程主机解析到非公网地址: {host}")
+        return records
+
+    async def close(self):
+        await self._resolver.close()
 
 
 @register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.8.0")
@@ -156,7 +191,9 @@ class CollectImagePlugin(Star):
         sender_id = task['sender_id']
         local_path = task.get('local_path')
         cleanup_path = task.get('cleanup_path')
-        image_url = task.get('image_url') or local_path
+        image_url = local_path
+        saved_image_path = None
+        db_inserted = False
         
         try:
             if not local_path:
@@ -187,10 +224,11 @@ class CollectImagePlugin(Star):
                 
                 # VLM 有效后再保存图片
                 timestamp = int(time.time())
-                ext = os.path.splitext(local_path)[1] or ".jpg"
-                image_filename = f"{timestamp}_{group_id}_{sender_id}{ext}"
+                ext = self._detect_image_extension(local_path)
+                image_filename = self._make_image_filename(ext)
                 image_path = os.path.join(self.images_dir, image_filename)
-                shutil.copy(local_path, image_path)
+                self._copy_image_exclusive(local_path, image_path)
+                saved_image_path = image_path
                 logger.info(f"[CollectImage] 图片已保存: {image_path}")
                 
                 # AnimeTrace 识别
@@ -207,7 +245,7 @@ class CollectImagePlugin(Star):
                 # 更健壮的 ai_detect 类型检查
                 ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
                 
-                self.db.insert_image(
+                inserted = self.db.insert_image(
                     file_hash=file_hash,
                     file_path=image_path,
                     file_name=image_filename,
@@ -221,9 +259,21 @@ class CollectImagePlugin(Star):
                     confirmed=confirmed,
                     phash=None,
                 )
+                db_inserted = inserted
+                if not inserted:
+                    try:
+                        os.remove(image_path)
+                    except FileNotFoundError:
+                        pass
+                    raise RuntimeError("图片数据库记录写入失败")
                 logger.info(f"[CollectImage] 分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
 
         except Exception as e:
+            if saved_image_path and not db_inserted and os.path.exists(saved_image_path):
+                try:
+                    os.remove(saved_image_path)
+                except OSError:
+                    pass
             logger.error(f"[CollectImage] 处理单图失败: {e}")
         finally:
             if cleanup_path and os.path.exists(cleanup_path):
@@ -244,38 +294,14 @@ class CollectImagePlugin(Star):
             logger.warning(f"[CollectImage] 获取图片本地路径失败，尝试重新下载: {e}")
 
         image_url = msg.url or msg.file or ""
-        if image_url.startswith("file://"):
-            parsed_file_url = urlparse(image_url)
-            file_path = unquote(parsed_file_url.path)
-            if os.path.exists(file_path):
-                return self._copy_to_owned_temp(file_path)
-        if image_url and os.path.exists(image_url):
-            return self._copy_to_owned_temp(os.path.abspath(image_url))
         if not image_url.startswith(("http://", "https://")):
             return None, None
-        if not self._is_safe_url(image_url):
-            logger.warning(f"[CollectImage] 不安全的图片URL，跳过下载: {image_url}")
-            return None, None
-
-        suffix = os.path.splitext(image_url.split("?", 1)[0])[1] or ".jpg"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp_path = tmp.name
 
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(image_url) as resp:
-                    if resp.status != 200:
-                        logger.error(f"[CollectImage] 重新下载图片失败: {resp.status}")
-                        os.remove(tmp_path)
-                        return None, None
-                    with open(tmp_path, "wb") as f:
-                        f.write(await resp.read())
+            tmp_path = await self._download_image_safely(image_url)
             return tmp_path, tmp_path
         except Exception as e:
             logger.error(f"[CollectImage] 重新下载图片异常: {e}")
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
             return None, None
 
     def _copy_to_owned_temp(self, source_path: str) -> tuple[str, str]:
@@ -286,39 +312,95 @@ class CollectImagePlugin(Star):
         return tmp_path, tmp_path
 
     def _is_safe_url(self, url: str) -> bool:
-        """验证URL是否安全，防止SSRF攻击"""
-        from urllib.parse import urlparse
-        import ipaddress
-        
+        """Perform the non-DNS part of remote URL validation."""
         try:
             parsed = urlparse(url)
-            
-            # 只允许 http 和 https 协议
-            if parsed.scheme not in ('http', 'https'):
+            if parsed.scheme.lower() not in ("http", "https"):
                 return False
-            
-            # 获取主机名
-            hostname = parsed.hostname
-            if not hostname:
+            if parsed.username or parsed.password or not parsed.hostname:
                 return False
-            
-            # 检查是否为内网地址
+
+            hostname = parsed.hostname.rstrip(".").lower()
+            if hostname in ("localhost", "localhost.localdomain"):
+                return False
+            if hostname.endswith((".local", ".internal")):
+                return False
+
             try:
-                ip = ipaddress.ip_address(hostname)
-                if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
-                    return False
+                return ipaddress.ip_address(hostname).is_global
             except ValueError:
-                # 不是IP地址，是域名
-                # 禁止 localhost 和常见内网域名
-                hostname_lower = hostname.lower()
-                if hostname_lower in ('localhost', 'localhost.localdomain'):
-                    return False
-                if hostname_lower.endswith('.local') or hostname_lower.endswith('.internal'):
-                    return False
-            
-            return True
-        except Exception:
+                return True
+        except (TypeError, ValueError):
             return False
+
+    async def _download_image_safely(self, url: str) -> str:
+        """Download an image with DNS, redirect, byte and pixel limits."""
+        if not self._is_safe_url(url):
+            raise ValueError("不安全的图片URL")
+
+        max_bytes = self._get_positive_int_config("max_download_size_mb", 10) * 1024 * 1024
+        max_pixels = self._get_positive_int_config("max_image_pixels", 40_000_000)
+        timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=15)
+        connector = aiohttp.TCPConnector(
+            resolver=PublicOnlyResolver(),
+            ttl_dns_cache=0,
+        )
+        current_url = url
+
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            for _ in range(4):
+                if not self._is_safe_url(current_url):
+                    raise ValueError("重定向目标不安全")
+
+                async with session.get(current_url, allow_redirects=False) as response:
+                    if response.status in (301, 302, 303, 307, 308):
+                        location = response.headers.get("Location")
+                        if not location:
+                            raise ValueError("重定向缺少Location")
+                        current_url = urljoin(current_url, location)
+                        continue
+
+                    if response.status != 200:
+                        raise ValueError(f"图片下载失败 HTTP {response.status}")
+
+                    if response.content_length is not None and response.content_length > max_bytes:
+                        raise ValueError("图片超过下载大小限制")
+
+                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+                    if content_type and not (
+                        content_type.startswith("image/")
+                        or content_type == "application/octet-stream"
+                    ):
+                        raise ValueError(f"远程内容不是图片: {content_type}")
+
+                    suffix = os.path.splitext(urlparse(current_url).path)[1].lower()
+                    if suffix not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                        suffix = ".img"
+
+                    tmp_path = None
+                    try:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                            tmp_path = tmp.name
+                            total = 0
+                            async for chunk in response.content.iter_chunked(64 * 1024):
+                                total += len(chunk)
+                                if total > max_bytes:
+                                    raise ValueError("图片超过下载大小限制")
+                                tmp.write(chunk)
+
+                        with PILImage.open(tmp_path) as image:
+                            width, height = image.size
+                            if width <= 0 or height <= 0 or width * height > max_pixels:
+                                raise ValueError("图片像素数量超过限制")
+                            image.verify()
+
+                        return tmp_path
+                    except Exception:
+                        if tmp_path and os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                        raise
+
+        raise ValueError("图片重定向次数过多")
 
     async def _do_process_forward_image(self, task):
         """处理转发消息中的图片"""
@@ -327,100 +409,87 @@ class CollectImagePlugin(Star):
         group_id = task['group_id']
         sender_id = task['sender_id']
         
-        # SSRF 防护：验证URL安全性
-        if not self._is_safe_url(image_url):
-            logger.warning(f"[CollectImage] 不安全的URL，跳过处理: {image_url}")
-            return
-        
         logger.info(f"[CollectImage] 处理转发图片: {image_url}")
-        
+        tmp_path = None
+        saved_image_path = None
+        db_inserted = False
+
         try:
-            # 下载图片到临时位置
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(image_url) as resp:
-                    if resp.status != 200:
-                        logger.error(f"[CollectImage] 下载图片失败: {resp.status}")
-                        return
-                    
-                    image_data = await resp.read()
-            
-            # 先检查哈希（不保存）
-            tmp_path = None
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-                    tmp_path = tmp.name
-                    tmp.write(image_data)
-                
-                file_hash = self._calculate_hash(tmp_path)
-                
-                if self.db.is_hash_exists(file_hash):
-                    logger.info("[CollectImage] 转发图片已存在 (MD5)，跳过")
-                    await self._reply_duplicate(event, group_id)
-                    return
-                
-                size_check = self._check_image_size(tmp_path)
-                if size_check is None:
-                    return
-                if not size_check:
-                    logger.info("[CollectImage] 转发图片尺寸过小，跳过")
-                    return
-                
-                # VLM 分析
-                result = await self.analyze_image(image_url, event)
-                
-                if result.get("filter_result") != "有效":
-                    logger.info(f"[CollectImage] 转发图片无效，跳过: {result.get('reason')}")
-                    return
-                
-                # VLM 有效后再保存图片
-                timestamp = int(time.time())
-                file_ext = ".jpg"
-                image_filename = f"{timestamp}_{group_id}_{sender_id}_{uuid.uuid4().hex[:8]}{file_ext}"
-                image_path = os.path.join(self.images_dir, image_filename)
-                
-                shutil.copy(tmp_path, image_path)
-                logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
-                
-                # AnimeTrace 识别
-                char_result = await self.recognize_character(image_url)
-                all_results = char_result.get("all_results", [])
-                ai_detect = char_result.get("ai_detect", "")
-                
-                person_count = len(all_results)
-                confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
-                not_confident_count = person_count - confirmed_count
-                confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
-                
-                character = self._extract_characters(all_results)
-                # 更健壮的 ai_detect 类型检查
-                ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
-                
-                self.db.insert_image(
-                    file_hash=file_hash,
-                    file_path=image_path,
-                    file_name=image_filename,
-                    group_id=str(group_id),
-                    sender_id=str(sender_id),
-                    timestamp=timestamp,
-                    tags=result.get("tags"),
-                    character=character,
-                    description=result.get("description"),
-                    ai_detect=ai_detect,
-                    confirmed=confirmed,
-                    phash=None,
-                )
-                logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
-            finally:
-                # 清理临时文件
-                if tmp_path and os.path.exists(tmp_path):
-                    try:
-                        os.remove(tmp_path)
-                    except OSError:
-                        pass
-                
+            tmp_path = await self._download_image_safely(image_url)
+            file_hash = self._calculate_hash(tmp_path)
+
+            if self.db.is_hash_exists(file_hash):
+                logger.info("[CollectImage] 转发图片已存在 (MD5)，跳过")
+                await self._reply_duplicate(event, group_id)
+                return
+
+            size_check = self._check_image_size(tmp_path)
+            if size_check is None:
+                return
+            if not size_check:
+                logger.info("[CollectImage] 转发图片尺寸过小，跳过")
+                return
+
+            result = await self.analyze_image(tmp_path, event)
+            if result.get("filter_result") != "有效":
+                logger.info(f"[CollectImage] 转发图片无效，跳过: {result.get('reason')}")
+                return
+
+            timestamp = int(time.time())
+            file_ext = self._detect_image_extension(tmp_path)
+            image_filename = self._make_image_filename(file_ext)
+            image_path = os.path.join(self.images_dir, image_filename)
+            self._copy_image_exclusive(tmp_path, image_path)
+            saved_image_path = image_path
+            logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
+
+            char_result = await self.recognize_character_from_file(tmp_path)
+            all_results = char_result.get("all_results", [])
+            ai_detect = char_result.get("ai_detect", "")
+
+            person_count = len(all_results)
+            confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+            not_confident_count = person_count - confirmed_count
+            confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
+            character = self._extract_characters(all_results)
+            ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
+
+            inserted = self.db.insert_image(
+                file_hash=file_hash,
+                file_path=image_path,
+                file_name=image_filename,
+                group_id=str(group_id),
+                sender_id=str(sender_id),
+                timestamp=timestamp,
+                tags=result.get("tags"),
+                character=character,
+                description=result.get("description"),
+                ai_detect=ai_detect,
+                confirmed=confirmed,
+                phash=None,
+            )
+            db_inserted = inserted
+            if not inserted:
+                try:
+                    os.remove(image_path)
+                except FileNotFoundError:
+                    pass
+                raise RuntimeError("图片数据库记录写入失败")
+
+            logger.info(f"[CollectImage] 转发图片分析完成: 人数={person_count}, 已确认={confirmed_count}, 未确认={not_confident_count}, 角色={character}, AI检测={ai_detect}")
         except Exception as e:
+            if saved_image_path and not db_inserted and os.path.exists(saved_image_path):
+                try:
+                    os.remove(saved_image_path)
+                except OSError:
+                    pass
             logger.error(f"[CollectImage] 处理转发图片失败: {e}")
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     async def _init_aliases_async(self):
         """异步初始化别名库"""
@@ -485,8 +554,13 @@ class CollectImagePlugin(Star):
         if webui_enabled:
             try:
                 from .web_server import WebServer
+                password = str(getattr(self.config, 'webui_password', '') or '')
+                if not password or password == "admin123":
+                    logger.error("[CollectImage] WebUI 未启动：请先设置非默认访问密码")
+                    return
                 port = getattr(self.config, 'webui_port', 9192)
-                self.web_server = WebServer(self, port=port)
+                host = getattr(self.config, 'webui_host', '127.0.0.1')
+                self.web_server = WebServer(self, host=host, port=port)
                 asyncio.create_task(self.web_server.start())
             except Exception as e:
                 logger.error(f"[CollectImage] 启动 WebUI 失败: {e}")
@@ -579,12 +653,64 @@ class CollectImagePlugin(Star):
             prompt_parts.append(f"\n{category}: {', '.join(tag_list)}")
         return "".join(prompt_parts)
 
+    def _sanitize_tags(self, tags: object) -> dict:
+        if not isinstance(tags, dict):
+            return {}
+        sanitized = {}
+        for category, values in tags.items():
+            definitions = self.tags_library.get(category)
+            if not isinstance(definitions, list) or not isinstance(values, list):
+                continue
+            allowed = {
+                str(value)
+                for definition in definitions
+                if isinstance(definition, dict)
+                for value in (definition.get("name"), definition.get("cn"))
+                if value
+            }
+            selected = []
+            for value in values[:3]:
+                value = str(value).strip()
+                if value in allowed and value not in selected:
+                    selected.append(value)
+            sanitized[category] = selected
+        return sanitized
+
+    @staticmethod
+    def _sanitize_generated_text(value: object, max_length: int) -> str:
+        text = str(value or "").replace("\x00", "").strip()
+        return text[:max_length]
+
     def _calculate_hash(self, file_path: str) -> str:
         hash_md5 = hashlib.md5()
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
+
+    @staticmethod
+    def _make_image_filename(extension: str) -> str:
+        extension = (extension or ".jpg").lower()
+        if extension not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+            extension = ".jpg"
+        return f"{int(time.time())}_{uuid.uuid4().hex}{extension}"
+
+    @staticmethod
+    def _copy_image_exclusive(source_path: str, destination_path: str) -> None:
+        with open(source_path, "rb") as source, open(destination_path, "xb") as destination:
+            shutil.copyfileobj(source, destination, length=64 * 1024)
+
+    @staticmethod
+    def _detect_image_extension(file_path: str) -> str:
+        format_extensions = {
+            "JPEG": ".jpg",
+            "PNG": ".png",
+            "GIF": ".gif",
+            "WEBP": ".webp",
+            "BMP": ".bmp",
+        }
+        with PILImage.open(file_path) as image:
+            return format_extensions.get((image.format or "").upper(), ".jpg")
 
     def _get_positive_int_config(self, key: str, default: int) -> int:
         try:
@@ -603,9 +729,17 @@ class CollectImagePlugin(Star):
         """检查图片尺寸，宽高阈值来自插件配置。"""
         min_width = self._get_positive_int_config('min_image_width', 600)
         min_height = self._get_positive_int_config('min_image_height', 600)
+        max_download_bytes = self._get_positive_int_config('max_download_size_mb', 10) * 1024 * 1024
+        max_pixels = self._get_positive_int_config('max_image_pixels', 40_000_000)
         try:
+            if os.path.getsize(file_path) > max_download_bytes:
+                logger.warning(f"[CollectImage] 图片文件超过大小限制，跳过: {file_path}")
+                return None
             with PILImage.open(file_path) as img:
                 width, height = img.size
+                if width <= 0 or height <= 0 or width * height > max_pixels:
+                    logger.warning(f"[CollectImage] 图片像素数量超过限制，跳过: {width}x{height}")
+                    return None
                 if width < min_width or height < min_height:
                     return False
                 return True
@@ -703,10 +837,12 @@ class CollectImagePlugin(Star):
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent, **kwargs):
-        group_id = event.get_group_id()
-        allowed_groups = self.config.get("allowed_groups", [])
+        group_id = str(event.get_group_id()).strip()
+        allowed_groups = _normalize_allowed_groups(
+            self.config.get("allowed_groups", [])
+        )
 
-        if allowed_groups and group_id not in allowed_groups:
+        if not allowed_groups or group_id not in allowed_groups:
             return
 
         sender_id = event.get_sender_id()
@@ -868,7 +1004,9 @@ class CollectImagePlugin(Star):
         tags_text = await self._llm_generate_with_retry(provider_id, match_prompt, [image_url])
         try:
             json_match = re.search(r'\{[^{}]*\}', tags_text, re.DOTALL)
-            matched_tags = json.loads(json_match.group()) if json_match else {}
+            matched_tags = self._sanitize_tags(
+                json.loads(json_match.group()) if json_match else {}
+            )
         except (json.JSONDecodeError, ValueError):
             matched_tags = {}
 
@@ -876,10 +1014,16 @@ class CollectImagePlugin(Star):
 包括但不限于：动漫角色、游戏角色、原创角色等。
 如果无法确定具体角色名，请回答"未知"。
 只返回角色名，不要其他解释。"""
-        character = await self._llm_generate_with_retry(provider_id, char_prompt, [image_url])
+        character = self._sanitize_generated_text(
+            await self._llm_generate_with_retry(provider_id, char_prompt, [image_url]),
+            200,
+        )
 
         desc_prompt = "请用一句话描述这张图片的主要内容，不超过30字。"
-        description = await self._llm_generate_with_retry(provider_id, desc_prompt, [image_url])
+        description = self._sanitize_generated_text(
+            await self._llm_generate_with_retry(provider_id, desc_prompt, [image_url]),
+            500,
+        )
 
         return {"tags": matched_tags, "character": character, "description": description}
 

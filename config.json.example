@@ -1,9 +1,11 @@
 {
   "allowed_groups": [],
-  "vision_model_endpoint": "",
-  "vision_model_api_key": "",
+  "webui_enabled": false,
+  "webui_host": "127.0.0.1",
+  "webui_port": 9192,
+  "webui_password": "",
   "min_image_width": 600,
   "min_image_height": 600,
-  "max_image_size_bytes": 10485760,
-  "enable_sticker_filter": true
+  "max_download_size_mb": 10,
+  "max_image_pixels": 40000000
 }

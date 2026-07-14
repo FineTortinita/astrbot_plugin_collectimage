@@ -49,13 +49,16 @@
 {
   "allowed_groups": ["123456789"],
   "webui_enabled": false,
+  "webui_host": "127.0.0.1",
   "webui_port": 9192,
-  "webui_password": "admin123",
+  "webui_password": "请设置至少8位的非默认密码",
   "filter_prompt": "请判断这张图片是否是有效的绘画素材...",
   "anime_trace_delay": 3,
   "min_image_width": 600,
   "min_image_height": 600,
   "max_file_size_mb": 2,
+  "max_download_size_mb": 10,
+  "max_image_pixels": 40000000,
   "max_image_dimension": 2000,
   "jpeg_quality": 85,
   "thumbnail_size": 300,
@@ -68,13 +71,16 @@
 |--------|--------|------|
 | `allowed_groups` | `[""]` | **白名单模式**。仅处理此列表中的群号；若为空，则插件不处理任何群组。 |
 | `webui_enabled` | `false` | 是否启用 WebUI 管理界面。 |
+| `webui_host` | `127.0.0.1` | WebUI 监听地址，默认仅本机可访问。 |
 | `webui_port` | `9192` | WebUI 监听端口。 |
-| `webui_password` | `admin123` | WebUI 访问密码，建议修改。 |
+| `webui_password` | 空 | 启用 WebUI 前必须设置至少8位的非默认密码。 |
 | `filter_prompt` | (见配置) | AI 图片筛选提示词，决定哪些图片被认为是有效的绘画素材。 |
 | `anime_trace_delay` | `3` | AnimeTrace API 调用间隔（秒），避免频率限制。 |
 | `min_image_width` | `600` | 自动收集时允许入库的最小图片宽度（像素），小于该宽度会跳过。 |
 | `min_image_height` | `600` | 自动收集时允许入库的最小图片高度（像素），小于该高度会跳过。 |
 | `max_file_size_mb` | `2` | 触发图片压缩的文件大小阈值（MB）。 |
+| `max_download_size_mb` | `10` | 自动收集和上传允许的最大图片文件大小（MB）。 |
+| `max_image_pixels` | `40000000` | 允许处理的最大图片像素总数。 |
 | `max_image_dimension` | `2000` | 图片压缩后的最大边长（像素），等比例缩放。 |
 | `jpeg_quality` | `85` | 图片压缩时的 JPEG 质量（1-100）。 |
 | `thumbnail_size` | `300` | WebUI 缩略图最大边长（像素）。 |
