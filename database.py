@@ -11,9 +11,7 @@ class Database:
     def __init__(self, db_dir: str):
         self.db_path = os.path.join(db_dir, "collectimage.db")
         self._conn: Optional[sqlite3.Connection] = None
-        self._phash_cache: dict[int, int] = {}  # image_id -> phash_int
         self._init_db()
-        self._load_phash_cache()
 
     def _get_connection(self) -> sqlite3.Connection:
         """获取持久化数据库连接（WAL 模式，复用连接）"""
@@ -25,20 +23,6 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
         return self._conn
-
-    def _load_phash_cache(self):
-        """加载所有 phash 到内存缓存，避免每次去重都全表扫描"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, phash FROM images WHERE phash IS NOT NULL AND phash != ''"
-        )
-        self._phash_cache.clear()
-        for row in cursor.fetchall():
-            try:
-                self._phash_cache[row[0]] = int(row[1], 16)
-            except (ValueError, TypeError):
-                pass
 
     def _init_db(self):
         conn = self._get_connection()
@@ -73,8 +57,6 @@ class Database:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash)")
-
         self._init_alias_db(conn, cursor)
 
         conn.commit()
@@ -105,55 +87,6 @@ class Database:
         cursor.execute("SELECT 1 FROM images WHERE file_hash = ? LIMIT 1", (file_hash,))
         return cursor.fetchone() is not None
 
-    def get_all_phashes(self) -> list:
-        """获取所有非空的 phash 及对应 id"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, phash FROM images WHERE phash IS NOT NULL AND phash != ''")
-        rows = cursor.fetchall()
-        return [(row[0], row[1]) for row in rows]
-
-    def find_similar_phash(self, phash: str, threshold: int = 10) -> Optional[dict]:
-        """查找与给定 phash 汉明距离 <= threshold 的图片（使用内存缓存）"""
-        if not phash:
-            return None
-        try:
-            phash_int = int(phash, 16)
-        except (ValueError, TypeError):
-            return None
-        for img_id, existing_int in self._phash_cache.items():
-            distance = bin(phash_int ^ existing_int).count('1')
-            if distance <= threshold:
-                return self.get_image_by_id(img_id)
-        return None
-
-    def update_phash(self, image_id: int, phash: str) -> bool:
-        """更新指定图片的 phash"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE images SET phash = ? WHERE id = ?", (phash, image_id))
-            conn.commit()
-            if phash and cursor.rowcount > 0:
-                try:
-                    self._phash_cache[image_id] = int(phash, 16)
-                except (ValueError, TypeError):
-                    pass
-            return cursor.rowcount > 0
-        except Exception:
-            return False
-
-    def get_images_without_phash(self, limit: int = 100) -> list:
-        """获取没有 phash 的图片记录"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, file_path FROM images WHERE phash IS NULL OR phash = '' LIMIT ?",
-            (limit,)
-        )
-        rows = cursor.fetchall()
-        return [{"id": row[0], "file_path": row[1]} for row in rows]
-
     def add_image(self, image_data: dict) -> bool:
         """从字典添加图片记录"""
         conn = self._get_connection()
@@ -179,12 +112,6 @@ class Database:
                 ),
             )
             conn.commit()
-            phash = image_data.get('phash')
-            if phash and cursor.lastrowid:
-                try:
-                    self._phash_cache[cursor.lastrowid] = int(phash, 16)
-                except (ValueError, TypeError):
-                    pass
             return True
         except sqlite3.IntegrityError:
             return False
@@ -227,11 +154,6 @@ class Database:
                 ),
             )
             conn.commit()
-            if phash and cursor.lastrowid:
-                try:
-                    self._phash_cache[cursor.lastrowid] = int(phash, 16)
-                except (ValueError, TypeError):
-                    pass
             return True
         except sqlite3.IntegrityError:
             return False
@@ -347,7 +269,6 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
             conn.commit()
-            self._phash_cache.pop(image_id, None)
             return True
         except Exception:
             return False
@@ -366,7 +287,6 @@ class Database:
                 file_path = row[1]
                 if file_path and not os.path.exists(file_path):
                     cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
-                    self._phash_cache.pop(image_id, None)
                     cleaned += 1
 
             conn.commit()
@@ -825,4 +745,3 @@ class Database:
             except Exception:
                 pass
             self._conn = None
-            self._phash_cache.clear()

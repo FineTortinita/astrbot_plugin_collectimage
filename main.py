@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import hashlib
 import ipaddress
 import json
@@ -82,6 +81,8 @@ class CollectImagePlugin(Star):
         self._init_task = None
         self._queued_image_ids: set = set()
         self._replied_message_ids: set = set()
+        self._animetrace_model_cache: Optional[str] = None
+        self._animetrace_model_cache_time: float = 0.0
         
         self.web_server = None
         self._init_web_server()
@@ -93,7 +94,6 @@ class CollectImagePlugin(Star):
     
     def _migrate_old_data(self):
         """迁移旧数据到新目录"""
-        import shutil
         old_data_dir = os.path.dirname(__file__)
         
         # 检查旧目录是否存在数据库或图片目录
@@ -231,8 +231,11 @@ class CollectImagePlugin(Star):
                 saved_image_path = image_path
                 logger.info(f"[CollectImage] 图片已保存: {image_path}")
                 
-                # AnimeTrace 识别
-                char_result = await self.recognize_character_from_file(local_path)
+                # 人物识别（AnimeTrace），受配置开关控制
+                if self.config.get("enable_animetrace", True):
+                    char_result = await self.recognize_character_from_file(local_path)
+                else:
+                    char_result = {"all_results": [], "ai_detect": ""}
                 all_results = char_result.get("all_results", [])
                 ai_detect = char_result.get("ai_detect", "")
                 
@@ -443,7 +446,11 @@ class CollectImagePlugin(Star):
             saved_image_path = image_path
             logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
 
-            char_result = await self.recognize_character_from_file(tmp_path)
+            # 人物识别（AnimeTrace），受配置开关控制
+            if self.config.get("enable_animetrace", True):
+                char_result = await self.recognize_character_from_file(tmp_path)
+            else:
+                char_result = {"all_results": [], "ai_detect": ""}
             all_results = char_result.get("all_results", [])
             ai_detect = char_result.get("ai_detect", "")
 
@@ -584,7 +591,7 @@ class CollectImagePlugin(Star):
         try:
             return await self.context.get_current_chat_provider_id(umo="default")
         except Exception:
-            pass
+            logger.debug("[CollectImage] 读取原始消息判断表情包失败", exc_info=True)
 
         try:
             all_providers = self.context.get_all_providers()
@@ -750,6 +757,45 @@ class CollectImagePlugin(Star):
             logger.warning(f"[CollectImage] 图片尺寸检查失败: {file_path}, {e}")
             return None
 
+    @staticmethod
+    def _is_sticker_data(data: object) -> bool:
+        """根据图片消息段的 data 字典判断是否为表情包/贴纸"""
+        if not isinstance(data, dict):
+            return False
+
+        def is_sub_type_emoji(sub_type: object) -> bool:
+            if sub_type is None:
+                return False
+            if sub_type == 1 or sub_type == "1":
+                return True
+            try:
+                return int(sub_type) == 1
+            except (ValueError, TypeError):
+                return False
+
+        def is_emoji_summary(summary: object) -> bool:
+            if not summary:
+                return False
+            s = str(summary).lower()
+            return '表情' in s or 'emoji' in s or 'sticker' in s
+
+        sub_type = data.get('sub_type') or data.get('subType')
+        if is_sub_type_emoji(sub_type):
+            return True
+        if is_emoji_summary(data.get('summary', '')):
+            return True
+        if data.get('emoji_id') or data.get('emoji_package_id'):
+            return True
+        url = data.get('url', '')
+        if url:
+            url_str = str(url).lower()
+            if 'vip.qq.com/club/item/parcel' in url_str or 'gxh.vip.qq.com' in url_str:
+                return True
+        img_type = data.get('type') or data.get('imageType') or data.get('image_type')
+        if img_type in ('emoji', 'sticker', 'face', 'meme'):
+            return True
+        return False
+
     def _is_sticker(self, img: Image, event: AstrMessageEvent | None = None, img_index: int = 0) -> bool:
         def is_emoji_summary(summary: object) -> bool:
             if not summary:
@@ -778,23 +824,8 @@ class CollectImagePlugin(Star):
 
         if image_segments and img_index < len(image_segments):
             matched_data = image_segments[img_index].get('data', {}) or {}
-            
-            sub_type = matched_data.get('sub_type')
-            if is_sub_type_emoji(sub_type):
+            if self._is_sticker_data(matched_data):
                 return True
-
-            summary = matched_data.get('summary', '')
-            if is_emoji_summary(summary):
-                return True
-
-            if matched_data.get('emoji_id') or matched_data.get('emoji_package_id'):
-                return True
-
-            url = matched_data.get('url', '')
-            if url:
-                url_str = str(url).lower()
-                if 'vip.qq.com/club/item/parcel' in url_str or 'gxh.vip.qq.com' in url_str:
-                    return True
 
         if hasattr(img, 'subType') and is_sub_type_emoji(img.subType):
             return True
@@ -807,21 +838,7 @@ class CollectImagePlugin(Star):
         try:
             raw_data = img.toDict()
             if isinstance(raw_data, dict) and 'data' in raw_data:
-                data = raw_data['data']
-                
-                sub_type = data.get('sub_type') or data.get('subType')
-                if is_sub_type_emoji(sub_type):
-                    return True
-
-                summary = data.get('summary', '')
-                if is_emoji_summary(summary):
-                    return True
-
-                if data.get('emoji_id') or data.get('emoji_package_id'):
-                    return True
-
-                img_type = data.get('type') or data.get('imageType') or data.get('image_type')
-                if img_type in ['emoji', 'sticker', 'face', 'meme']:
+                if self._is_sticker_data(raw_data['data']):
                     return True
         except Exception:
             pass
@@ -835,8 +852,30 @@ class CollectImagePlugin(Star):
 
         return False
 
+    @staticmethod
+    def _debug_source(group_id: str, sender_id: str, **extra: object) -> str:
+        parts = [f"group={group_id}", f"sender={sender_id}"]
+        for key, value in extra.items():
+            if value is not None:
+                parts.append(f"{key}={value}")
+        return ", ".join(parts)
+
+    @staticmethod
+    def _processed_message_type(segment: object) -> Optional[str]:
+        if isinstance(segment, Image):
+            return "Image"
+        if isinstance(segment, Forward):
+            return "Forward"
+        if isinstance(segment, dict) and segment.get('type') == 'image':
+            return "dict.image"
+        return None
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent, **kwargs):
+        # 识别功能关闭 = 插件自动收图功能关闭
+        if not self.config.get("enable_llm_filter", True):
+            return
+
         group_id = str(event.get_group_id()).strip()
         allowed_groups = _normalize_allowed_groups(
             self.config.get("allowed_groups", [])
@@ -848,21 +887,27 @@ class CollectImagePlugin(Star):
         sender_id = event.get_sender_id()
 
         messages = event.get_messages()
-        logger.info(f"[CollectImage] 消息链: 共{len(messages)}条, 类型={[type(m).__name__ for m in messages]}")
+        processed_types = [
+            f"{i}:{processed_type}"
+            for i, msg in enumerate(messages)
+            if (processed_type := self._processed_message_type(msg))
+        ]
+        if processed_types:
+            source = self._debug_source(group_id, sender_id)
+            logger.info(f"[CollectImage] 消息链: 来源=({source}), 共{len(messages)}条, 已处理类型={processed_types}")
         
         for i, msg in enumerate(messages):
-            msg_type = type(msg).__name__
             # 处理普通图片
             if isinstance(msg, Image):
+                source = self._debug_source(group_id, sender_id, index=i)
+                logger.info(f"[CollectImage] 处理消息类型: Image, 来源=({source}), 内容={msg}")
                 await self._process_single_image(msg, event, group_id, sender_id, i)
             
             # 处理合并转发消息 (Forward 类型)
             elif isinstance(msg, Forward):
-                logger.info(f"[CollectImage] 检测到Forward: id={msg.id}")
+                source = self._debug_source(group_id, sender_id, index=i)
+                logger.info(f"[CollectImage] 处理消息类型: Forward, 来源=({source}), id={msg.id}, 内容={msg}")
                 await self._process_forward_message(msg.id, event, group_id, sender_id)
-            
-            else:
-                logger.info(f"[CollectImage] 未处理的消息类型: {msg_type}")
 
     async def _process_forward_message(self, forward_id, event: AstrMessageEvent, group_id: str, sender_id: str) -> None:
         """处理合并转发消息，通过API获取内容"""
@@ -876,9 +921,10 @@ class CollectImagePlugin(Star):
             return
         
         try:
-            logger.info(f"[CollectImage] 调用 get_forward_msg API, id={forward_id}")
+            source = self._debug_source(group_id, sender_id, forward_id=forward_id)
+            logger.info(f"[CollectImage] 调用 get_forward_msg API, 来源=({source})")
             result = await bot.api.call_action('get_forward_msg', id=str(forward_id))
-            logger.info(f"[CollectImage] get_forward_msg 返回: {result}")
+            logger.info(f"[CollectImage] get_forward_msg 返回: 来源=({source}), 内容={result}")
             
             if not isinstance(result, dict):
                 logger.warning(f"[CollectImage] API返回格式错误: {type(result)}")
@@ -889,26 +935,44 @@ class CollectImagePlugin(Star):
                 logger.warning("[CollectImage] 转发消息为空")
                 return
             
-            logger.info(f"[CollectImage] 转发消息包含 {len(messages)} 个节点")
+            logger.info(f"[CollectImage] 转发消息包含 {len(messages)} 个节点, 来源=({source})")
             
             # 解析每个节点的消息
-            for msg_item in messages:
+            for node_index, msg_item in enumerate(messages):
                 message_content = msg_item.get('message', [])
                 if not isinstance(message_content, list):
                     continue
                 
-                logger.info(f"[CollectImage] 节点消息内容: {message_content}")
+                node_sender = msg_item.get('sender') or msg_item.get('user_id') or msg_item.get('nickname')
+                node_source = self._debug_source(group_id, sender_id, forward_id=forward_id, node=node_index, node_sender=node_sender)
+                processed_segments = [
+                    f"{seg_index}:{processed_type}"
+                    for seg_index, segment in enumerate(message_content)
+                    if (processed_type := self._processed_message_type(segment)) in ("Image", "dict.image")
+                ]
+                if processed_segments:
+                    processed_content = [
+                        segment
+                        for segment in message_content
+                        if self._processed_message_type(segment) in ("Image", "dict.image")
+                    ]
+                    logger.info(f"[CollectImage] 节点消息内容: 来源=({node_source}), 已处理类型={processed_segments}, 内容={processed_content}")
                 
-                for segment in message_content:
-                    seg_type = type(segment).__name__
-                    
+                for seg_index, segment in enumerate(message_content):
                     if isinstance(segment, Image):
-                        await self._process_single_image(segment, event, group_id, sender_id, 0)
+                        segment_source = self._debug_source(group_id, sender_id, forward_id=forward_id, node=node_index, segment=seg_index, node_sender=node_sender)
+                        logger.info(f"[CollectImage] 处理消息类型: Forward.Image, 来源=({segment_source}), 内容={segment}")
+                        await self._process_single_image(segment, event, group_id, sender_id, seg_index)
                     elif isinstance(segment, dict) and segment.get('type') == 'image':
                         # 字典格式的图片消息段
-                        file_data = segment.get('data', {})
+                        file_data = segment.get('data', {}) or {}
+                        if self._is_sticker_data(file_data):
+                            logger.info("[CollectImage] 跳过转发消息中的表情包")
+                            continue
                         file_url = file_data.get('url') or file_data.get('file', '')
                         if file_url:
+                            segment_source = self._debug_source(group_id, sender_id, forward_id=forward_id, node=node_index, segment=seg_index, node_sender=node_sender)
+                            logger.info(f"[CollectImage] 处理消息类型: Forward.dict.image, 来源=({segment_source}), 内容={segment}")
                             await self._process_image_by_url(file_url, event, group_id, sender_id)
         
         except Exception as e:
@@ -988,9 +1052,14 @@ class CollectImagePlugin(Star):
                     raise
 
     async def _analyze_image_content(self, provider_id: str, image_url: str) -> dict:
-        """分析图片内容（标签、角色、描述）"""
-        tags_prompt = self._build_tags_prompt()
-        match_prompt = f"""{tags_prompt}
+        """分析图片内容（标签、描述），受配置开关控制"""
+        matched_tags = {}
+        description = ""
+
+        # 图片内容识别（标签 + 描述）
+        if self.config.get("enable_llm_content", True):
+            tags_prompt = self._build_tags_prompt()
+            match_prompt = f"""{tags_prompt}
 
 请分析这张图片，从上述标签中选择最匹配的标签。
 要求：
@@ -1001,40 +1070,42 @@ class CollectImagePlugin(Star):
 {{"gender": ["中文标签"], "hair": ["中文标签"], "eyes": ["中文标签"], "clothes": ["中文标签"], "pose": ["中文标签"], "style": ["中文标签"], "expression": ["中文标签"]}}
 如果某个分类没有匹配的标签，返回空列表。"""
 
-        tags_text = await self._llm_generate_with_retry(provider_id, match_prompt, [image_url])
-        try:
-            json_match = re.search(r'\{[^{}]*\}', tags_text, re.DOTALL)
-            matched_tags = self._sanitize_tags(
-                json.loads(json_match.group()) if json_match else {}
+            tags_text = await self._llm_generate_with_retry(provider_id, match_prompt, [image_url])
+            try:
+                json_match = re.search(r'\{[^{}]*\}', tags_text, re.DOTALL)
+                matched_tags = self._sanitize_tags(
+                    json.loads(json_match.group()) if json_match else {}
+                )
+            except (json.JSONDecodeError, ValueError):
+                matched_tags = {}
+
+            desc_prompt = "请用一句话描述这张图片的主要内容，不超过30字。"
+            description = self._sanitize_generated_text(
+                await self._llm_generate_with_retry(provider_id, desc_prompt, [image_url]),
+                500,
             )
-        except (json.JSONDecodeError, ValueError):
-            matched_tags = {}
 
-        char_prompt = """请识别这张图片中的角色名称（如果有）。
-包括但不限于：动漫角色、游戏角色、原创角色等。
-如果无法确定具体角色名，请回答"未知"。
-只返回角色名，不要其他解释。"""
-        character = self._sanitize_generated_text(
-            await self._llm_generate_with_retry(provider_id, char_prompt, [image_url]),
-            200,
-        )
-
-        desc_prompt = "请用一句话描述这张图片的主要内容，不超过30字。"
-        description = self._sanitize_generated_text(
-            await self._llm_generate_with_retry(provider_id, desc_prompt, [image_url]),
-            500,
-        )
-
-        return {"tags": matched_tags, "character": character, "description": description}
+        return {"tags": matched_tags, "description": description}
 
     async def analyze_image(self, image_url: str, event: AstrMessageEvent) -> dict:
         try:
+            # 识别功能关闭 = 插件收图功能关闭，不保存任何图片
+            if not self.config.get("enable_llm_filter", True):
+                logger.info("[CollectImage] LLM 识别功能已关闭，跳过收图")
+                return {
+                    "filter_result": "无效",
+                    "reason": "识别功能已关闭",
+                    "tags": [],
+                    "character": "",
+                    "description": ""
+                }
+
             provider_id = await self._get_provider_id(event)
 
             filter_prompt = getattr(self.config, "filter_prompt", "") or """请判断这张图片是否是有效的绘画素材。
 有效：有人物、角色、场景、物品等具体内容的动漫风格绘画、插画 CG、漫画、游戏立绘等人工绘制的图片。
 无效：照片、漫画，写实图片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。
-请直接回答"有效"或"无效"，，无需其他解释。"""
+请直接回答"有效"或"无效"，无需其他解释。"""
 
             filter_result = await self._llm_generate_with_retry(provider_id, filter_prompt, [image_url])
             logger.info(f"[CollectImage] 筛选结果: {filter_result}")
@@ -1065,64 +1136,152 @@ class CollectImagePlugin(Star):
                 "description": ""
             }
 
-    async def recognize_character(self, image_url: Optional[str] = None, image_base64: Optional[str] = None) -> dict:
-        """调用 AnimeTrace API 识别角色，返回完整结果"""
+    async def _resolve_animetrace_model(self) -> str:
+        """获取 AnimeTrace 当前可用模型（带缓存），失败时回退到配置值。
+
+        官方文档建议不要写死模型名，而是通过 /v1/model/list 动态获取；
+        这里优先选择 default=true 且 enabled=true 的模型，缓存 6 小时。
+        """
+        now = time.time()
+        if self._animetrace_model_cache and (now - self._animetrace_model_cache_time) < 21600:
+            return self._animetrace_model_cache
+
+        configured = (getattr(self.config, 'animetrace_model', '') or '').strip()
+        fallback = configured or 'animetrace-yuri-4.2'
+
         try:
             async with aiohttp.ClientSession() as session:
-                form = aiohttp.FormData()
-                
-                # 优先使用 base64，其次使用 url
-                if image_base64:
-                    form.add_field('base64', image_base64)
-                elif image_url:
-                    form.add_field('url', image_url)
-                else:
-                    logger.error("[CollectImage] 角色识别缺少图片输入")
-                    return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
-                
-                form.add_field('model', 'animetrace_high_beta')
-                form.add_field('is_multi', '1')
-                form.add_field('ai_detect', '1')
-                
-                async with session.post(
-                    'https://api.animetrace.com/v1/search', 
-                    data=form,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                async with session.get(
+                    'https://api.animetrace.com/v1/model/list',
+                    timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
                     if resp.status != 200:
-                        logger.error(f"[CollectImage] 角色识别失败 HTTP: {resp.status}")
-                        return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
-                    
+                        return fallback
                     result = await resp.json()
-                    
+
+            models = result.get('data', []) if isinstance(result, dict) else []
+            for item in models:
+                if item.get('default') and item.get('enabled') and item.get('id'):
+                    self._animetrace_model_cache = item['id']
+                    self._animetrace_model_cache_time = now
+                    return item['id']
+            for item in models:
+                if item.get('enabled') and item.get('id'):
+                    self._animetrace_model_cache = item['id']
+                    self._animetrace_model_cache_time = now
+                    return item['id']
+            return fallback
+        except Exception as e:
+            logger.warning(f"[CollectImage] 获取 AnimeTrace 模型列表失败，使用回退模型: {fallback}, {e}")
+            return fallback
+
+    async def recognize_character(
+        self,
+        image_file: bytes,
+        image_filename: str = "image.jpg",
+        image_content_type: str = "image/jpeg",
+    ) -> dict:
+        """调用 AnimeTrace API 识别角色，返回完整结果。
+
+        通过 multipart 的 file 字段上传图片字节；
+        对 429/503 限流及可重试的业务错误做指数退避重试。
+        """
+        try:
+            max_retries = max(0, int(getattr(self.config, 'animetrace_max_retries', 3)))
+        except (TypeError, ValueError):
+            max_retries = 3
+        try:
+            base_delay = max(1, int(getattr(self.config, 'animetrace_retry_delay', 2)))
+        except (TypeError, ValueError):
+            base_delay = 2
+        try:
+            anime_trace_delay = max(0, int(getattr(self.config, 'anime_trace_delay', 3)))
+        except (TypeError, ValueError):
+            anime_trace_delay = 3
+
+        # 可重试的业务错误码：17702=服务繁忙, 17706=识别失败可重试, 17731=并发过多
+        retryable_codes = (17702, 17706, 17731)
+
+        for attempt in range(max_retries + 1):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    form = aiohttp.FormData()
+                    form.add_field('file', image_file, filename=image_filename, content_type=image_content_type)
+
+                    model = await self._resolve_animetrace_model()
+                    form.add_field('model', model)
+                    form.add_field('is_multi', '1')
+                    form.add_field('ai_detect', '1')
+
+                    async with session.post(
+                        'https://api.animetrace.com/v1/search',
+                        data=form,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as resp:
+                        # 429 限流 / 503 服务繁忙：指数退避后重试
+                        if resp.status in (429, 503):
+                            if attempt < max_retries:
+                                wait = base_delay * (2 ** attempt)
+                                logger.warning(
+                                    f"[CollectImage] AnimeTrace 限流/繁忙 (HTTP {resp.status})，"
+                                    f"{wait}s 后重试 ({attempt + 1}/{max_retries + 1})"
+                                )
+                                await asyncio.sleep(wait)
+                                continue
+                            logger.error(f"[CollectImage] 角色识别失败 HTTP: {resp.status}（重试耗尽）")
+                            return {"character": "未知", "ai_detect": f"识别失败(HTTP{resp.status})", "all_results": []}
+
+                        if resp.status != 200:
+                            logger.error(f"[CollectImage] 角色识别失败 HTTP: {resp.status}")
+                            return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
+
+                        result = await resp.json()
+
                     # code=0 表示成功
                     if result.get("code") != 0:
-                        logger.error(f"[CollectImage] 角色识别失败: {result.get('code')}")
-                        return {"character": "未知", "ai_detect": str(result.get("code", "")), "all_results": []}
-                    
-                    # 获取原始结果
+                        code = result.get("code")
+                        msg = result.get("message", "")
+                        if code in retryable_codes and attempt < max_retries:
+                            wait = base_delay * (2 ** attempt)
+                            logger.warning(
+                                f"[CollectImage] AnimeTrace 业务错误 code={code}，"
+                                f"{wait}s 后重试 ({attempt + 1}/{max_retries + 1})"
+                            )
+                            await asyncio.sleep(wait)
+                            continue
+                        logger.error(f"[CollectImage] 角色识别失败: code={code} message={msg}")
+                        return {"character": "未知", "ai_detect": f"识别失败({code})", "all_results": []}
+
                     data = result.get("data", [])
                     ai_detect = str(result.get("ai", ""))
-                    
-                    # 检查 data 是否为空
+
                     if not data:
                         logger.warning(f"[CollectImage] 角色识别成功但无结果 (data为空)")
                         return {"character": "未知", "ai_detect": ai_detect, "all_results": []}
-                    
+
                     logger.info(f"[CollectImage] 角色识别成功，共 {len(data)} 个结果, AI检测: {ai_detect}")
-                    
-                    # API 调用后等待（频率控制）
-                    anime_trace_delay = getattr(self.config, 'anime_trace_delay', 3)
-                    await asyncio.sleep(anime_trace_delay)
-                    
+
+                    # 成功后等待，做频率控制
+                    if anime_trace_delay:
+                        await asyncio.sleep(anime_trace_delay)
+
                     return {"character": "未知", "ai_detect": ai_detect, "all_results": data}
-                    
-        except Exception as e:
-            logger.error(f"[CollectImage] 角色识别异常: {e}")
-            return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
+
+            except Exception as e:
+                if attempt < max_retries:
+                    wait = base_delay * (2 ** attempt)
+                    logger.warning(
+                        f"[CollectImage] 角色识别异常: {e}，{wait}s 后重试 ({attempt + 1}/{max_retries + 1})"
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                logger.error(f"[CollectImage] 角色识别异常: {e}")
+                return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
+
+        return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
 
     async def recognize_character_from_file(self, file_path: str) -> dict:
-        """从本地文件识别角色（使用 base64 上传），图片过大时自动压缩"""
+        """从本地文件识别角色（multipart 上传文件），图片过大时自动压缩"""
         try:
             # 从配置获取参数
             max_file_size_mb = getattr(self.config, 'max_file_size_mb', 2)
@@ -1131,7 +1290,9 @@ class CollectImagePlugin(Star):
             
             # 检查文件大小
             file_size = os.path.getsize(file_path)
-            image_base64 = None
+            image_bytes = None
+            image_filename = "image.jpg"
+            image_content_type = "image/jpeg"
             
             if file_size > max_file_size_mb * 1024 * 1024:
                 logger.info(f"[CollectImage] 图片文件过大 ({file_size/1024/1024:.2f}MB > {max_file_size_mb}MB)，进行压缩")
@@ -1151,17 +1312,28 @@ class CollectImagePlugin(Star):
                     if img.mode in ('RGBA', 'P'):
                         img = img.convert('RGB')
                     
-                    # 压缩保存
+                    # 压缩保存为 JPEG
                     buffer = BytesIO()
                     img.save(buffer, format='JPEG', quality=jpeg_quality, optimize=True)
-                    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                    logger.info(f"[CollectImage] 压缩后大小: {len(buffer.getvalue())/1024:.2f}KB")
+                    image_bytes = buffer.getvalue()
+                    logger.info(f"[CollectImage] 压缩后大小: {len(image_bytes)/1024:.2f}KB")
             else:
-                # 文件大小正常，直接读取
+                # 文件大小正常，直接读取（保留原始格式）
+                ext = os.path.splitext(file_path)[1].lower() or ".jpg"
+                image_filename = f"image{ext}"
+                image_content_type = {
+                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                    ".png": "image/png", ".gif": "image/gif",
+                    ".webp": "image/webp", ".bmp": "image/bmp",
+                }.get(ext, "image/jpeg")
                 with open(file_path, 'rb') as f:
-                    image_base64 = base64.b64encode(f.read()).decode('utf-8')
+                    image_bytes = f.read()
             
-            return await self.recognize_character(image_url=None, image_base64=image_base64)
+            return await self.recognize_character(
+                image_file=image_bytes,
+                image_filename=image_filename,
+                image_content_type=image_content_type,
+            )
         except Exception as e:
             logger.error(f"[CollectImage] 读取图片文件失败: {e}")
             return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
@@ -1268,13 +1440,24 @@ class CollectImagePlugin(Star):
 
     async def reanalyze_image(self, image_path: str) -> dict:
         try:
-            provider_id = await self._get_provider_id()
-            image_url = f"file://{image_path}"
+            content = {"tags": {}, "description": ""}
 
-            content = await self._analyze_image_content(provider_id, image_url)
+            # 图片内容识别（标签 + 描述，LLM）
+            if self.config.get("enable_llm_content", True):
+                provider_id = await self._get_provider_id()
+                content = await self._analyze_image_content(provider_id, image_path)
+
+            # 人物识别（AnimeTrace）
+            character = "[]"
+            if self.config.get("enable_animetrace", True):
+                char_result = await self.recognize_character_from_file(image_path)
+                character = self._extract_characters(char_result.get("all_results", []))
+
             return {
                 "filter_result": "有效",
-                **content
+                "tags": content.get("tags", {}),
+                "character": character,
+                "description": content.get("description", "")
             }
 
         except Exception as e:

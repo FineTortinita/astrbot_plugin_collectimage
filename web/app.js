@@ -14,6 +14,16 @@ let logPollTimer = null;
 let logCursor = 0;
 const MAX_LOG_LINES = 1000;
 
+// HTML 转义，防止存储型 XSS（角色名/标签/别名等可能包含用户或外部服务可控内容）
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function getGridCols() {
     const sw = window.innerWidth;
     return sw >= 1536 ? 6 : sw >= 1280 ? 5 : sw >= 1024 ? 4 : sw >= 640 ? 3 : 2;
@@ -1118,7 +1128,6 @@ function renderImages(images) {
         tags.textContent = String(tagsText || '无标签');
         content.append(heading, tags);
         card.append(checkboxWrap, imageWrap, content);
-
         checkbox.addEventListener('click', (e) => {
             e.stopPropagation();
             if (checkbox.checked) {

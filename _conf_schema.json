@@ -34,6 +34,21 @@
     "type": "int",
     "default": 3
   },
+  "animetrace_model": {
+    "description": "AnimeTrace 识别使用的模型名。留空则自动调用模型列表接口获取当前默认可用模型（推荐）；也可手动指定模型 id，如 animetrace-yuri-4.2。模型名错误会导致识别失败，参考 https://ai.animedb.cn/api-docs/ 。",
+    "type": "string",
+    "default": ""
+  },
+  "animetrace_max_retries": {
+    "description": "AnimeTrace 遇到 429 限流 / 503 繁忙等瞬时错误时的最大重试次数（指数退避）。设为 0 表示不重试。",
+    "type": "int",
+    "default": 3
+  },
+  "animetrace_retry_delay": {
+    "description": "AnimeTrace 重试的基础退避秒数（指数增长：2、4、8...）。",
+    "type": "int",
+    "default": 2
+  },
   "min_image_width": {
     "description": "自动收集时允许入库的最小图片宽度（像素）。宽度小于该值的图片会被跳过，用于过滤表情、小图和低价值素材。",
     "type": "int",
@@ -94,6 +109,21 @@
     "type": "string",
     "_special": "select_provider",
     "default": ""
+  },
+  "enable_llm_filter": {
+    "description": "启用识别（VLM 筛选），同时作为插件自动收图功能的总开关。关闭后将完全停止自动收集群聊图片。",
+    "type": "bool",
+    "default": true
+  },
+  "enable_animetrace": {
+    "description": "启用人物识别（AnimeTrace 角色识别）。关闭后不再调用 AnimeTrace 识别角色（自动收图、重分析、上传均跳过）。",
+    "type": "bool",
+    "default": true
+  },
+  "enable_llm_content": {
+    "description": "启用图片内容识别（生成标签与描述）。关闭后将跳过标签和描述生成，图片仅做哈希去重与尺寸过滤。",
+    "type": "bool",
+    "default": true
   },
   "duplicate_reply_probability": {
     "description": "重复图片回复概率（0-100）。当监控群聊中发送的图片已存在于数据库时，以此概率引用原消息并回复提示。0 表示不回复，100 表示必定回复。",

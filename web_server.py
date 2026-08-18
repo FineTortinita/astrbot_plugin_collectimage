@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import os
-import re
 import secrets
 import threading
 import time
@@ -146,7 +145,7 @@ class WebServer:
                 self._log_sink_id = logger.add(
                     self._append_log,
                     level="INFO",
-                    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+                    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {file}:{line} | {message}",
                     filter=only_collectimage,
                 )
                 return
@@ -157,7 +156,7 @@ class WebServer:
             logger.warning(f"[CollectImage WebUI] 日志捕获初始化失败: {e}")
 
     def _append_log(self, message: Any):
-        line = self._sanitize_log_line(str(message).rstrip())
+        line = str(message).rstrip()
         if not line:
             return
 
@@ -178,27 +177,6 @@ class WebServer:
             except Exception as e:
                 logger.debug(f"[CollectImage WebUI] 移除日志 handler 失败: {e}")
             self._log_handler = None
-
-    @staticmethod
-    def _sanitize_log_line(line: str) -> str:
-        """隐藏 WebUI 日志中容易泄露的消息载荷、URL 和本地路径。"""
-        sensitive_prefixes = (
-            "get_forward_msg 返回:",
-            "节点消息内容:",
-            "消息链:",
-        )
-        for prefix in sensitive_prefixes:
-            marker = f"[CollectImage] {prefix}"
-            if marker in line:
-                return line.split(marker, 1)[0] + marker + " [已隐藏敏感内容]"
-
-        line = re.sub(r"https?://[^\s\]'>\"}）)]+", "[URL]", line)
-        line = re.sub(
-            r"(?<!\w)(?:[A-Za-z]:)?[/\\][^\s|,，]+",
-            "[PATH]",
-            line,
-        )
-        return line
 
     def _setup_routes(self):
         self.app.router.add_post("/api/auth/login", self.handle_login)
@@ -434,8 +412,11 @@ class WebServer:
         limit, offset = self._bounded_pagination(limit, offset, max_limit)
         
         confirmed_val = None
-        if confirmed is not None:
-            confirmed_val = self._safe_int(confirmed)
+        if confirmed not in (None, ""):
+            try:
+                confirmed_val = int(confirmed)
+            except (ValueError, TypeError):
+                confirmed_val = None
 
         images = self.plugin.db.search_images(
             tag=tag,
@@ -476,8 +457,11 @@ class WebServer:
         limit, offset = self._bounded_pagination(limit, offset, max_limit)
 
         confirmed_val = None
-        if confirmed is not None:
-            confirmed_val = self._safe_int(confirmed)
+        if confirmed not in (None, ""):
+            try:
+                confirmed_val = int(confirmed)
+            except (ValueError, TypeError):
+                confirmed_val = None
 
         images, total = self.plugin.db.search_with_alias(
             keyword=keyword, limit=limit, offset=offset, confirmed=confirmed_val
@@ -650,7 +634,10 @@ class WebServer:
             return self._err("图片路径不存在", 404)
         
         try:
-            # 使用本地文件 base64 方式识别
+            if not self.plugin.config.get("enable_animetrace", True):
+                return self._err("人物识别功能已关闭")
+
+            # 使用本地文件 multipart 上传识别
             result = await self.plugin.recognize_character_from_file(image_path)
             
             # 从 AnimeTrace 结果直接提取角色（根据结果数量确定人数）
@@ -760,9 +747,15 @@ class WebServer:
             if field is None or field.name != 'file' or not field.filename:
                 return self._err("无效的文件字段")
             
-            # Step 2: 校验 - 文件格式
-            filename = field.filename
-            if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
+            # Step 2: 校验 - 文件格式（用白名单确定扩展名，避免文件名注入）
+            filename = field.filename or ""
+            filename_lower = filename.lower()
+            ext = ".jpg"
+            for allowed_ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                if filename_lower.endswith(allowed_ext):
+                    ext = allowed_ext
+                    break
+            else:
                 return self._err("不支持的文件格式，请上传 JPG/PNG/GIF/WebP/BMP 图片")
             
             # Step 3: 流式写入 + hash 计算
@@ -813,8 +806,11 @@ class WebServer:
             except OSError as e:
                 logger.warning(f"[CollectImage] 清理上传临时文件失败: {e}")
             
-            # Step 5: 分析 - AnimeTrace 角色识别
-            char_result = await self.plugin.recognize_character_from_file(image_path)
+            # Step 5: 分析 - 人物识别（AnimeTrace），受配置开关控制
+            if self.plugin.config.get("enable_animetrace", True):
+                char_result = await self.plugin.recognize_character_from_file(image_path)
+            else:
+                char_result = {"all_results": [], "ai_detect": ""}
             all_results = char_result.get("all_results", [])
             ai_detect = char_result.get("ai_detect", "")
             character = self.plugin._extract_characters(all_results)
@@ -1182,8 +1178,8 @@ class WebServer:
                 if self._import_state["stop_requested"]:
                     break
                 try:
-                    self.plugin.db.add_alias(alias_type, original_name, alias)
-                    imported += 1
+                    if self.plugin.db.add_alias(alias_type, original_name, alias):
+                        imported += 1
                 except Exception:
                     pass
             

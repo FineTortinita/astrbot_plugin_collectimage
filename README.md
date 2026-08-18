@@ -53,7 +53,13 @@
   "webui_port": 9192,
   "webui_password": "请设置至少8位的非默认密码",
   "filter_prompt": "请判断这张图片是否是有效的绘画素材...",
+  "enable_llm_filter": true,
+  "enable_animetrace": true,
+  "enable_llm_content": true,
   "anime_trace_delay": 3,
+  "animetrace_model": "",
+  "animetrace_max_retries": 3,
+  "animetrace_retry_delay": 2,
   "min_image_width": 600,
   "min_image_height": 600,
   "max_file_size_mb": 2,
@@ -75,7 +81,13 @@
 | `webui_port` | `9192` | WebUI 监听端口。 |
 | `webui_password` | 空 | 启用 WebUI 前必须设置至少8位的非默认密码。 |
 | `filter_prompt` | (见配置) | AI 图片筛选提示词，决定哪些图片被认为是有效的绘画素材。 |
+| `enable_llm_filter` | `true` | 启用识别（VLM 筛选），同时作为插件自动收图功能的总开关。关闭后将完全停止自动收集群聊图片。 |
+| `enable_animetrace` | `true` | 启用人物识别（AnimeTrace 角色识别）。关闭后不再调用 AnimeTrace 识别角色。 |
+| `enable_llm_content` | `true` | 启用图片内容识别（生成标签与描述）。关闭后跳过标签与描述生成。 |
 | `anime_trace_delay` | `3` | AnimeTrace API 调用间隔（秒），避免频率限制。 |
+| `animetrace_model` | 空（自动） | AnimeTrace 识别模型名。留空自动获取当前默认可用模型（推荐），也可手动指定如 `animetrace-yuri-4.2`。 |
+| `animetrace_max_retries` | `3` | AnimeTrace 遇到 429/503 等瞬时错误时的最大重试次数（指数退避），0 表示不重试。 |
+| `animetrace_retry_delay` | `2` | AnimeTrace 重试的基础退避秒数（指数增长：2、4、8...）。 |
 | `min_image_width` | `600` | 自动收集时允许入库的最小图片宽度（像素），小于该宽度会跳过。 |
 | `min_image_height` | `600` | 自动收集时允许入库的最小图片高度（像素），小于该高度会跳过。 |
 | `max_file_size_mb` | `2` | 触发图片压缩的文件大小阈值（MB）。 |
@@ -134,7 +146,6 @@ astrbot_plugin_collectimage/
 │   └── app.js
 ├── tags_library.json    # 精简 Tag 库
 ├── aliases.json         # 角色/作品别名数据
-├── import_bangumi.py   # Bangumi 数据导入脚本
 ├── _conf_schema.json   # 配置定义
 ├── metadata.yaml       # 插件元数据
 ├── images/            # 图片存储目录
