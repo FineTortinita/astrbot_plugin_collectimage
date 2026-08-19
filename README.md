@@ -1,6 +1,6 @@
 # AstrBot 图片收集与分析插件 (astrbot_plugin_collectimage)
 
-一款专为 AstrBot 设计的群聊图片自动化收集与结构化分析插件。通过集成视觉大模型 (VLM) 和 AnimeTrace API，插件能够自动识别群聊图片内容、提取标签和角色，并实现本地持久化存储与检索。
+一款专为 AstrBot 设计的群聊图片自动化收集与结构化分析插件。通过一次视觉大模型 (VLM) 调用同时判断图片有效性、角色、标签、描述和 AI 生成图，并实现本地持久化存储与检索。
 
 ## 🌟 核心功能
 
@@ -11,9 +11,9 @@
   - **内容过滤**：VLM 二次确认，只保留绘画/插画/CG/漫画/游戏立绘等人工绘制的图片，过滤照片。
   - **先分析后保存**：VLM 无效的图片不会保存到本地，避免垃圾文件。
 - **队列处理**：串行队列处理图片，解决高频发送时的重复记录问题。
-- **AnimeTrace 频率控制**：每次 API 调用间隔可配置（默认 3 秒），避免限流失败。
+- **角色识别**：由首次视觉模型分析同时完成，避免额外调用第三方人物识别接口。
 - **视觉模型分析**：利用 VLM 自动生成图片描述和特征标签。
-- **AnimeTrace 角色识别**：
+- **角色信息**：
   - 自动识别动漫角色，根据检测框数量确定人数。
   - 根据 `not_confident` 标志自动标记确认状态。
   - 支持多角色图片存储。
@@ -54,12 +54,7 @@
   "webui_password": "请设置至少8位的非默认密码",
   "filter_prompt": "请判断这张图片是否是有效的绘画素材...",
   "enable_llm_filter": true,
-  "enable_animetrace": true,
   "enable_llm_content": true,
-  "anime_trace_delay": 3,
-  "animetrace_model": "",
-  "animetrace_max_retries": 3,
-  "animetrace_retry_delay": 2,
   "min_image_width": 600,
   "min_image_height": 600,
   "max_file_size_mb": 2,
@@ -82,12 +77,7 @@
 | `webui_password` | 空 | 启用 WebUI 前必须设置至少8位的非默认密码。 |
 | `filter_prompt` | (见配置) | AI 图片筛选提示词，决定哪些图片被认为是有效的绘画素材。 |
 | `enable_llm_filter` | `true` | 启用识别（VLM 筛选），同时作为插件自动收图功能的总开关。关闭后将完全停止自动收集群聊图片。 |
-| `enable_animetrace` | `true` | 启用人物识别（AnimeTrace 角色识别）。关闭后不再调用 AnimeTrace 识别角色。 |
 | `enable_llm_content` | `true` | 启用图片内容识别（生成标签与描述）。关闭后跳过标签与描述生成。 |
-| `anime_trace_delay` | `3` | AnimeTrace API 调用间隔（秒），避免频率限制。 |
-| `animetrace_model` | 空（自动） | AnimeTrace 识别模型名。留空自动获取当前默认可用模型（推荐），也可手动指定如 `animetrace-yuri-4.2`。 |
-| `animetrace_max_retries` | `3` | AnimeTrace 遇到 429/503 等瞬时错误时的最大重试次数（指数退避），0 表示不重试。 |
-| `animetrace_retry_delay` | `2` | AnimeTrace 重试的基础退避秒数（指数增长：2、4、8...）。 |
 | `min_image_width` | `600` | 自动收集时允许入库的最小图片宽度（像素），小于该宽度会跳过。 |
 | `min_image_height` | `600` | 自动收集时允许入库的最小图片高度（像素），小于该高度会跳过。 |
 | `max_file_size_mb` | `2` | 触发图片压缩的文件大小阈值（MB）。 |
@@ -126,7 +116,7 @@
 - 查看大图和详情
 - 手动编辑标签、角色、描述
 - 手动标记确认/未确认状态
-- 重新识别角色（AnimeTrace）
+- 重新使用视觉模型分析角色和图片内容
 - **批量操作**：批量选择、批量确认、批量删除
 - **文件导入**：从本地导入图片到数据库
 - **插件配置**：在线修改所有配置参数

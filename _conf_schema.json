@@ -29,26 +29,6 @@
     "type": "string",
     "default": "请判断这张图片是否是有效的绘画素材。\n有效：有人物、角色、场景、物品等具体内容的动漫风格绘画、插画 CG、漫画、游戏立绘等人工绘制的图片。\n无效：照片、漫画、写实图片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。\n请直接回答\"有效\"或\"无效\"，无需其他解释。"
   },
-  "anime_trace_delay": {
-    "description": "AnimeTrace API 调用间隔（秒）。用于频率控制，避免被 API 限流。推荐值：3-5秒。降低可能导致 429 错误，提高会降低识别速度。",
-    "type": "int",
-    "default": 3
-  },
-  "animetrace_model": {
-    "description": "AnimeTrace 识别使用的模型名。留空则自动调用模型列表接口获取当前默认可用模型（推荐）；也可手动指定模型 id，如 animetrace-yuri-4.2。模型名错误会导致识别失败，参考 https://ai.animedb.cn/api-docs/ 。",
-    "type": "string",
-    "default": ""
-  },
-  "animetrace_max_retries": {
-    "description": "AnimeTrace 遇到 429 限流 / 503 繁忙等瞬时错误时的最大重试次数（指数退避）。设为 0 表示不重试。",
-    "type": "int",
-    "default": 3
-  },
-  "animetrace_retry_delay": {
-    "description": "AnimeTrace 重试的基础退避秒数（指数增长：2、4、8...）。",
-    "type": "int",
-    "default": 2
-  },
   "min_image_width": {
     "description": "自动收集时允许入库的最小图片宽度（像素）。宽度小于该值的图片会被跳过，用于过滤表情、小图和低价值素材。",
     "type": "int",
@@ -60,7 +40,7 @@
     "default": 600
   },
   "max_file_size_mb": {
-    "description": "触发图片压缩的文件大小阈值（MB）。超过此大小的图片会被等比例压缩后再发送到 AnimeTrace API，避免 413 错误。推荐值：2MB。如果经常遇到 413 错误可降低此值。",
+    "description": "触发图片压缩的文件大小阈值（MB）。超过此大小的图片会被等比例压缩后再发送给视觉模型，避免请求过大。推荐值：2MB。",
     "type": "int",
     "default": 2
   },
@@ -112,11 +92,6 @@
   },
   "enable_llm_filter": {
     "description": "启用识别（VLM 筛选），同时作为插件自动收图功能的总开关。关闭后将完全停止自动收集群聊图片。",
-    "type": "bool",
-    "default": true
-  },
-  "enable_animetrace": {
-    "description": "启用人物识别（AnimeTrace 角色识别）。关闭后不再调用 AnimeTrace 识别角色（自动收图、重分析、上传均跳过）。",
     "type": "bool",
     "default": true
   },

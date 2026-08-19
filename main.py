@@ -58,7 +58,7 @@ class PublicOnlyResolver(AbstractResolver):
         await self._resolver.close()
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.8.0")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.9.0")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -81,9 +81,6 @@ class CollectImagePlugin(Star):
         self._init_task = None
         self._queued_image_ids: set = set()
         self._replied_message_ids: set = set()
-        self._animetrace_model_cache: Optional[str] = None
-        self._animetrace_model_cache_time: float = 0.0
-        
         self.web_server = None
         self._init_web_server()
         
@@ -231,22 +228,12 @@ class CollectImagePlugin(Star):
                 saved_image_path = image_path
                 logger.info(f"[CollectImage] 图片已保存: {image_path}")
                 
-                # 人物识别（AnimeTrace），受配置开关控制
-                if self.config.get("enable_animetrace", True):
-                    char_result = await self.recognize_character_from_file(local_path)
-                else:
-                    char_result = {"all_results": [], "ai_detect": ""}
-                all_results = char_result.get("all_results", [])
-                ai_detect = char_result.get("ai_detect", "")
-                
-                person_count = len(all_results)
-                confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
-                not_confident_count = person_count - confirmed_count
-                confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
-                
-                character = self._extract_characters(all_results)
-                # 更健壮的 ai_detect 类型检查
-                ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
+                character = result.get("character", "[]")
+                ai_detect = "true" if result.get("ai_detect") else "false"
+                person_count = len(json.loads(character)) if character else 0
+                confirmed_count = person_count
+                not_confident_count = 0
+                confirmed = 1 if person_count > 0 else 0
                 
                 inserted = self.db.insert_image(
                     file_hash=file_hash,
@@ -446,20 +433,12 @@ class CollectImagePlugin(Star):
             saved_image_path = image_path
             logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
 
-            # 人物识别（AnimeTrace），受配置开关控制
-            if self.config.get("enable_animetrace", True):
-                char_result = await self.recognize_character_from_file(tmp_path)
-            else:
-                char_result = {"all_results": [], "ai_detect": ""}
-            all_results = char_result.get("all_results", [])
-            ai_detect = char_result.get("ai_detect", "")
-
-            person_count = len(all_results)
-            confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
-            not_confident_count = person_count - confirmed_count
-            confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
-            character = self._extract_characters(all_results)
-            ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
+            character = result.get("character", "[]")
+            ai_detect = "true" if result.get("ai_detect") else "false"
+            person_count = len(json.loads(character)) if character else 0
+            confirmed_count = person_count
+            not_confident_count = 0
+            confirmed = 1 if person_count > 0 else 0
 
             inserted = self.db.insert_image(
                 file_hash=file_hash,
@@ -1096,33 +1075,34 @@ class CollectImagePlugin(Star):
                     "filter_result": "无效",
                     "reason": "识别功能已关闭",
                     "tags": [],
-                    "character": "",
+                    "character": "[]",
+                    "ai_detect": False,
                     "description": ""
                 }
 
             provider_id = await self._get_provider_id(event)
 
-            filter_prompt = getattr(self.config, "filter_prompt", "") or """请判断这张图片是否是有效的绘画素材。
-有效：有人物、角色、场景、物品等具体内容的动漫风格绘画、插画 CG、漫画、游戏立绘等人工绘制的图片。
-无效：照片、漫画，写实图片、截图、表情包、大段文字、二维码、UI界面、广告图、纯文字图片、模板图等无意义内容。
-请直接回答"有效"或"无效"，无需其他解释。"""
-
-            filter_result = await self._llm_generate_with_retry(provider_id, filter_prompt, [image_url])
-            logger.info(f"[CollectImage] 筛选结果: {filter_result}")
-
-            if "无效" in filter_result:
-                return {
-                    "filter_result": "无效",
-                    "reason": filter_result,
-                    "tags": [],
-                    "character": "",
-                    "description": ""
-                }
-
-            content = await self._analyze_image_content(provider_id, image_url)
+            filter_prompt = getattr(self.config, "filter_prompt", "") or "请判断这张图片是否是有效的动漫/插画素材。"
+            prompt = f"""{filter_prompt}
+请在同一次分析中完成以下任务，并且只返回 JSON：
+{{"valid": true, "characters": [{{"name": "角色名", "work": "作品名"}}], "ai_detect": false, "tags": {{"gender": [], "hair": [], "eyes": [], "clothes": [], "pose": [], "style": [], "expression": []}}, "description": "一句话描述，不超过30字"}}
+valid=false 时 characters、tags 为空数组/对象。无法确认角色时不要猜测，返回空数组。ai_detect 必须是布尔值。"""
+            text = await self._llm_generate_with_retry(provider_id, prompt, [image_url])
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            parsed = json.loads(match.group()) if match else {}
+            characters = []
+            for item in parsed.get("characters", []):
+                if isinstance(item, dict) and str(item.get("name", "")).strip():
+                    characters.append({"name": str(item["name"]).strip()[:100], "work": str(item.get("work", "")).strip()[:100]})
+            content = {
+                "tags": self._sanitize_tags(parsed.get("tags", {})),
+                "character": json.dumps(characters, ensure_ascii=False),
+                "ai_detect": bool(parsed.get("ai_detect", False)),
+                "description": self._sanitize_generated_text(parsed.get("description", ""), 500),
+            }
             return {
-                "filter_result": "有效",
-                "reason": "",
+                "filter_result": "有效" if parsed.get("valid", True) else "无效",
+                "reason": "" if parsed.get("valid", True) else "LLM 判定为无效素材",
                 **content
             }
 
@@ -1132,293 +1112,10 @@ class CollectImagePlugin(Star):
                 "filter_result": "错误",
                 "reason": str(e),
                 "tags": [],
-                "character": "",
+                "character": "[]",
+                "ai_detect": False,
                 "description": ""
             }
-
-    async def _resolve_animetrace_model(self) -> str:
-        """获取 AnimeTrace 当前可用模型（带缓存），失败时回退到配置值。
-
-        官方文档建议不要写死模型名，而是通过 /v1/model/list 动态获取；
-        这里优先选择 default=true 且 enabled=true 的模型，缓存 6 小时。
-        """
-        now = time.time()
-        if self._animetrace_model_cache and (now - self._animetrace_model_cache_time) < 21600:
-            return self._animetrace_model_cache
-
-        configured = (getattr(self.config, 'animetrace_model', '') or '').strip()
-        fallback = configured or 'animetrace-yuri-4.2'
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    'https://api.animetrace.com/v1/model/list',
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
-                    if resp.status != 200:
-                        return fallback
-                    result = await resp.json()
-
-            models = result.get('data', []) if isinstance(result, dict) else []
-            for item in models:
-                if item.get('default') and item.get('enabled') and item.get('id'):
-                    self._animetrace_model_cache = item['id']
-                    self._animetrace_model_cache_time = now
-                    return item['id']
-            for item in models:
-                if item.get('enabled') and item.get('id'):
-                    self._animetrace_model_cache = item['id']
-                    self._animetrace_model_cache_time = now
-                    return item['id']
-            return fallback
-        except Exception as e:
-            logger.warning(f"[CollectImage] 获取 AnimeTrace 模型列表失败，使用回退模型: {fallback}, {e}")
-            return fallback
-
-    async def recognize_character(
-        self,
-        image_file: bytes,
-        image_filename: str = "image.jpg",
-        image_content_type: str = "image/jpeg",
-    ) -> dict:
-        """调用 AnimeTrace API 识别角色，返回完整结果。
-
-        通过 multipart 的 file 字段上传图片字节；
-        对 429/503 限流及可重试的业务错误做指数退避重试。
-        """
-        try:
-            max_retries = max(0, int(getattr(self.config, 'animetrace_max_retries', 3)))
-        except (TypeError, ValueError):
-            max_retries = 3
-        try:
-            base_delay = max(1, int(getattr(self.config, 'animetrace_retry_delay', 2)))
-        except (TypeError, ValueError):
-            base_delay = 2
-        try:
-            anime_trace_delay = max(0, int(getattr(self.config, 'anime_trace_delay', 3)))
-        except (TypeError, ValueError):
-            anime_trace_delay = 3
-
-        # 可重试的业务错误码：17702=服务繁忙, 17706=识别失败可重试, 17731=并发过多
-        retryable_codes = (17702, 17706, 17731)
-
-        for attempt in range(max_retries + 1):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    form = aiohttp.FormData()
-                    form.add_field('file', image_file, filename=image_filename, content_type=image_content_type)
-
-                    model = await self._resolve_animetrace_model()
-                    form.add_field('model', model)
-                    form.add_field('is_multi', '1')
-                    form.add_field('ai_detect', '1')
-
-                    async with session.post(
-                        'https://api.animetrace.com/v1/search',
-                        data=form,
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as resp:
-                        # 429 限流 / 503 服务繁忙：指数退避后重试
-                        if resp.status in (429, 503):
-                            if attempt < max_retries:
-                                wait = base_delay * (2 ** attempt)
-                                logger.warning(
-                                    f"[CollectImage] AnimeTrace 限流/繁忙 (HTTP {resp.status})，"
-                                    f"{wait}s 后重试 ({attempt + 1}/{max_retries + 1})"
-                                )
-                                await asyncio.sleep(wait)
-                                continue
-                            logger.error(f"[CollectImage] 角色识别失败 HTTP: {resp.status}（重试耗尽）")
-                            return {"character": "未知", "ai_detect": f"识别失败(HTTP{resp.status})", "all_results": []}
-
-                        if resp.status != 200:
-                            logger.error(f"[CollectImage] 角色识别失败 HTTP: {resp.status}")
-                            return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
-
-                        result = await resp.json()
-
-                    # code=0 表示成功
-                    if result.get("code") != 0:
-                        code = result.get("code")
-                        msg = result.get("message", "")
-                        if code in retryable_codes and attempt < max_retries:
-                            wait = base_delay * (2 ** attempt)
-                            logger.warning(
-                                f"[CollectImage] AnimeTrace 业务错误 code={code}，"
-                                f"{wait}s 后重试 ({attempt + 1}/{max_retries + 1})"
-                            )
-                            await asyncio.sleep(wait)
-                            continue
-                        logger.error(f"[CollectImage] 角色识别失败: code={code} message={msg}")
-                        return {"character": "未知", "ai_detect": f"识别失败({code})", "all_results": []}
-
-                    data = result.get("data", [])
-                    ai_detect = str(result.get("ai", ""))
-
-                    if not data:
-                        logger.warning(f"[CollectImage] 角色识别成功但无结果 (data为空)")
-                        return {"character": "未知", "ai_detect": ai_detect, "all_results": []}
-
-                    logger.info(f"[CollectImage] 角色识别成功，共 {len(data)} 个结果, AI检测: {ai_detect}")
-
-                    # 成功后等待，做频率控制
-                    if anime_trace_delay:
-                        await asyncio.sleep(anime_trace_delay)
-
-                    return {"character": "未知", "ai_detect": ai_detect, "all_results": data}
-
-            except Exception as e:
-                if attempt < max_retries:
-                    wait = base_delay * (2 ** attempt)
-                    logger.warning(
-                        f"[CollectImage] 角色识别异常: {e}，{wait}s 后重试 ({attempt + 1}/{max_retries + 1})"
-                    )
-                    await asyncio.sleep(wait)
-                    continue
-                logger.error(f"[CollectImage] 角色识别异常: {e}")
-                return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
-
-        return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
-
-    async def recognize_character_from_file(self, file_path: str) -> dict:
-        """从本地文件识别角色（multipart 上传文件），图片过大时自动压缩"""
-        try:
-            # 从配置获取参数
-            max_file_size_mb = getattr(self.config, 'max_file_size_mb', 2)
-            max_dimension = getattr(self.config, 'max_image_dimension', 2000)
-            jpeg_quality = getattr(self.config, 'jpeg_quality', 85)
-            
-            # 检查文件大小
-            file_size = os.path.getsize(file_path)
-            image_bytes = None
-            image_filename = "image.jpg"
-            image_content_type = "image/jpeg"
-            
-            if file_size > max_file_size_mb * 1024 * 1024:
-                logger.info(f"[CollectImage] 图片文件过大 ({file_size/1024/1024:.2f}MB > {max_file_size_mb}MB)，进行压缩")
-                with PILImage.open(file_path) as img:
-                    # 获取原始尺寸
-                    width, height = img.size
-                    
-                    # 计算缩放比例（等比例缩放）
-                    if max(width, height) > max_dimension:
-                        scale = max_dimension / max(width, height)
-                        new_width = int(width * scale)
-                        new_height = int(height * scale)
-                        img = img.resize((new_width, new_height), PILImage.Resampling.LANCZOS)
-                        logger.info(f"[CollectImage] 缩放图片: {width}x{height} -> {new_width}x{new_height}")
-                    
-                    # 转换为RGB（如果是RGBA）
-                    if img.mode in ('RGBA', 'P'):
-                        img = img.convert('RGB')
-                    
-                    # 压缩保存为 JPEG
-                    buffer = BytesIO()
-                    img.save(buffer, format='JPEG', quality=jpeg_quality, optimize=True)
-                    image_bytes = buffer.getvalue()
-                    logger.info(f"[CollectImage] 压缩后大小: {len(image_bytes)/1024:.2f}KB")
-            else:
-                # 文件大小正常，直接读取（保留原始格式）
-                ext = os.path.splitext(file_path)[1].lower() or ".jpg"
-                image_filename = f"image{ext}"
-                image_content_type = {
-                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                    ".png": "image/png", ".gif": "image/gif",
-                    ".webp": "image/webp", ".bmp": "image/bmp",
-                }.get(ext, "image/jpeg")
-                with open(file_path, 'rb') as f:
-                    image_bytes = f.read()
-            
-            return await self.recognize_character(
-                image_file=image_bytes,
-                image_filename=image_filename,
-                image_content_type=image_content_type,
-            )
-        except Exception as e:
-            logger.error(f"[CollectImage] 读取图片文件失败: {e}")
-            return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
-
-    def _extract_characters(self, all_results: list) -> str:
-        """从 AnimeTrace 结果中提取角色名和作品，返回 JSON 数组
-        - not_confident=true: 取前2个
-        - not_confident=false: 取第1个
-        """
-        if not all_results:
-            return "[]"
-        
-        characters = []
-        
-        for item in all_results:
-            char_list = item.get("character", [])
-            if not char_list:
-                continue
-            
-            # 根据 not_confident 决定取几个
-            is_not_confident = item.get("not_confident", False)
-            max_take = 2 if is_not_confident else 1
-            
-            for char_info in char_list[:max_take]:
-                char_name = char_info.get("character", "")
-                char_work = char_info.get("work", "")
-                if char_name:
-                    characters.append({
-                        "name": char_name,
-                        "work": char_work or ""
-                    })
-        
-        if not characters:
-            return "[]"
-        return json.dumps(characters, ensure_ascii=False)
-
-    @filter.command("moe")
-    async def moe(self, event: AstrMessageEvent, args: str = ""):
-        """搜索角色或标签的图片（模糊匹配+随机）"""
-        # 解析参数: /moe <关键词> [数量]
-        kw = ""
-        count = 1
-        
-        if args:
-            parts = args.strip().split()
-            if parts:
-                kw = parts[0]
-                if len(parts) > 1:
-                    try:
-                        count = int(parts[1])
-                    except ValueError:
-                        count = 1
-        
-        if not kw:
-            results = self.db.search_all_random_with_alias(keyword="", limit=1)
-            if not results:
-                yield event.plain_result("暂无图片")
-                return
-            for img in results:
-                yield event.image_result(img["file_path"])
-            return
-        
-        if kw == "stats":
-            total = self.db.count_images()
-            yield event.plain_result(f"📊 图片收集统计\n\n共收集 {total} 张图片")
-            return
-        
-        if count < 1:
-            count = 1
-        if count > 10:
-            count = 10
-        
-        # 优先搜索角色（含别名匹配）
-        results = self.db.search_character_random_with_alias(keyword=kw, limit=count)
-        
-        # 角色没找到再搜索标签和描述（含别名匹配）
-        if not results:
-            results = self.db.search_all_random_with_alias(keyword=kw, limit=count)
-        
-        if not results:
-            yield event.plain_result(f"未找到包含「{kw}」的图片")
-            return
-
-        for img in results:
-            yield event.image_result(img["file_path"])
 
     async def terminate(self):
         if self._init_task and not self._init_task.done():
@@ -1442,22 +1139,14 @@ class CollectImagePlugin(Star):
         try:
             content = {"tags": {}, "description": ""}
 
-            # 图片内容识别（标签 + 描述，LLM）
-            if self.config.get("enable_llm_content", True):
-                provider_id = await self._get_provider_id()
-                content = await self._analyze_image_content(provider_id, image_path)
-
-            # 人物识别（AnimeTrace）
-            character = "[]"
-            if self.config.get("enable_animetrace", True):
-                char_result = await self.recognize_character_from_file(image_path)
-                character = self._extract_characters(char_result.get("all_results", []))
+            content = await self.analyze_image(image_path, None)
 
             return {
-                "filter_result": "有效",
+                "filter_result": content.get("filter_result", "有效"),
                 "tags": content.get("tags", {}),
-                "character": character,
-                "description": content.get("description", "")
+                "character": content.get("character", "[]"),
+                "description": content.get("description", ""),
+                "ai_detect": content.get("ai_detect", False)
             }
 
         except Exception as e:
@@ -1466,6 +1155,7 @@ class CollectImagePlugin(Star):
                 "filter_result": "错误",
                 "reason": str(e),
                 "tags": {},
-                "character": "",
+                "character": "[]",
+                "ai_detect": False,
                 "description": ""
             }

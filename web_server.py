@@ -634,14 +634,8 @@ class WebServer:
             return self._err("图片路径不存在", 404)
         
         try:
-            if not self.plugin.config.get("enable_animetrace", True):
-                return self._err("人物识别功能已关闭")
-
-            # 使用本地文件 multipart 上传识别
-            result = await self.plugin.recognize_character_from_file(image_path)
-            
-            # 从 AnimeTrace 结果直接提取角色（根据结果数量确定人数）
-            character = self.plugin._extract_characters(result.get("all_results", []))
+            result = await self.plugin.analyze_image(image_path, None)
+            character = result.get("character", "[]")
             
             # 更新数据库
             self.plugin.db.update_character(image_id, character)
@@ -806,18 +800,12 @@ class WebServer:
             except OSError as e:
                 logger.warning(f"[CollectImage] 清理上传临时文件失败: {e}")
             
-            # Step 5: 分析 - 人物识别（AnimeTrace），受配置开关控制
-            if self.plugin.config.get("enable_animetrace", True):
-                char_result = await self.plugin.recognize_character_from_file(image_path)
-            else:
-                char_result = {"all_results": [], "ai_detect": ""}
-            all_results = char_result.get("all_results", [])
-            ai_detect = char_result.get("ai_detect", "")
-            character = self.plugin._extract_characters(all_results)
-            
-            person_count = len(all_results)
-            confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
-            confirmed = 1 if (person_count > 0 and confirmed_count == person_count) else 0
+            # Step 5: 一次 LLM 分析同时提取角色、标签、描述和 AI 图判断
+            analysis = await self.plugin.analyze_image(image_path, None)
+            ai_detect = "true" if analysis.get("ai_detect") else "false"
+            character = analysis.get("character", "[]")
+            person_count = len(json.loads(character)) if character else 0
+            confirmed = 1 if person_count > 0 else 0
             
             # Step 6: 入库 - 保存到数据库
             image_data = {
@@ -827,9 +815,9 @@ class WebServer:
                 'group_id': 'webui',
                 'sender_id': 'manual',
                 'timestamp': timestamp,
-                'tags': json.dumps({}, ensure_ascii=False),
+                'tags': json.dumps(analysis.get('tags', {}), ensure_ascii=False),
                 'character': character,
-                'description': '',
+                'description': analysis.get('description', ''),
                 'ai_detect': ai_detect,
                 'confirmed': confirmed,
                 'created_at': timestamp,
