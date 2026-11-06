@@ -310,6 +310,7 @@ class WebServer:
             "script-src 'self' 'unsafe-eval' https://cdn.tailwindcss.com "
             "https://cdn.jsdelivr.net https://unpkg.com; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "font-src 'self' data:; "
             "img-src 'self' data: blob:; connect-src 'self'; "
             "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         )
@@ -697,9 +698,9 @@ class WebServer:
 
     async def handle_get_stats(self, request: web.Request) -> web.Response:
         try:
-            days = self._safe_int(request.query.get("days"), 7)
-            if days not in [7, 15, 30]:
-                days = 7
+            days = self._safe_int(request.query.get("days"), 365)
+            if days not in [7, 15, 30, 90, 180, 365]:
+                days = max(7, min(days, 365))
             stats = self.plugin.db.get_stats(days)
             return self._ok(stats)
         except Exception as e:

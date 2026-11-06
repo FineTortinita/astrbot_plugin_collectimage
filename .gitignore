@@ -215,4 +215,9 @@ web/cache/
 config.json
 import_bangumi.py
 aliases.json
+.oil-ui/
+.sisyphus/
+csv/
+web/stats_365.json
+
 

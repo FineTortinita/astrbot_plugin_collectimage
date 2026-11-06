@@ -20,5 +20,14 @@
   "enable_llm_filter": true,
   "enable_llm_content": true,
   "duplicate_reply_probability": 0,
-  "duplicate_reply_messages": ["这张图已经收录过了~", "图库里已经有这张图了哦", "这张图之前收录过了！"]
+  "duplicate_reply_messages": [
+    "这张图已经收录过了~",
+    "图库里已经有这张图了哦",
+    "这张图之前收录过了！"
+  ],
+  "jev_filter_enabled": false,
+  "jev_filter_api_key": "",
+  "jev_filter_api_base": "https://api.experientiallabs.ai/v1",
+  "jev_filter_model": "jev-latest",
+  "jev_filter_threshold": 50
 }

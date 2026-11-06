@@ -1,615 +1,605 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>图片收集管理器</title>
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <!-- Toastify CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.css">
-    <!-- Heroicons -->
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <style>
-        :root {
-            --gradient-start: #DDD6F3;
-            --gradient-end: #FAACA8;
-            --accent: #9B59B6;
-        }
-        
-        body {
-            background-image: linear-gradient(-20deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
-            min-height: 100vh;
-        }
-        
-        .glass-card {
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.5);
-        }
-        
-        .image-card {
-            transition: all 0.3s ease;
-        }
-        
-        .image-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 24px rgba(155, 89, 182, 0.2);
-        }
-        
-        .image-card img {
-            transition: transform 0.3s ease;
-        }
-        
-        .image-card:hover img {
-            transform: scale(1.05);
-        }
-        
-        .confirm-badge {
-            width: 24px;
-            height: 24px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            font-size: 12px;
-            flex-shrink: 0;
-        }
-        
-        .confirm-badge.confirmed {
-            background: #22C55E;
-            color: white;
-        }
-        
-        .confirm-badge.unconfirmed {
-            background: #F59E0B;
-            color: white;
-        }
-        
-        .sidebar-item {
-            transition: all 0.2s ease;
-        }
-        
-        .sidebar-item:hover {
-            background: rgba(155, 89, 182, 0.1);
-        }
-        
-        .sidebar-item.active {
-            background: rgba(155, 89, 182, 0.2);
-            border-left: 3px solid var(--accent);
-        }
-        
-        .modal-overlay {
-            background: rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(4px);
-        }
-        
-        .modal-content {
-            animation: modalSlideIn 0.3s ease;
-        }
-        
-        @media (max-width: 767px) {
-            .sidebar-item.active {
-                border-left: none;
-            }
-        }
-        
-        @keyframes modalSlideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .btn-primary {
-            background: linear-gradient(135deg, #9B59B6, #8E44AD);
-            color: white;
-            transition: all 0.2s ease;
-        }
-        
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #8E44AD, #7D3C98);
-            transform: translateY(-1px);
-        }
-        
-        .pagination input {
-            width: 60px;
-            text-align: center;
-        }
-        
-        /* Toast 样式覆盖 */
-        .toastify {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-    </style>
+    <link rel="stylesheet" href="/web/software.css?v=20261107-theme">
 </head>
-<body class="text-gray-700 font-sans">
+<body>
+    <div id="ui-notice" role="status" aria-live="polite" hidden></div>
     <div id="app">
-        <!-- 登录页 -->
-        <div id="login-page" class="min-h-screen flex items-center justify-center p-4">
-            <div class="glass-card rounded-2xl shadow-xl p-8 w-full max-w-md">
-                <div class="text-center mb-8">
-                    <div class="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-purple-400 to-pink-400 rounded-full flex items-center justify-center">
-                        <i data-lucide="image" class="w-8 h-8 text-white"></i>
+        <!-- 登录页 (Retro Password Dialog Window) -->
+        <div id="login-page" class="min-h-screen flex items-center justify-center p-4" style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;">
+            <div class="retro-window" style="width: 100%; max-width: 460px;">
+                <div class="retro-titlebar">
+                    <div class="retro-titlebar-left">
+                        <span class="retro-ornament-box" aria-hidden="true"></span>
+                        <span>图片收集管理器 · 登录</span>
                     </div>
-                    <h1 class="text-2xl font-bold text-gray-800">图片收集管理器</h1>
-                    <p class="text-gray-500 mt-2">AstrBot 插件</p>
+                    <button type="button" class="retro-key theme-toggle-btn" aria-label="切换亮色或暗色模式">◐ 暗色模式</button>
                 </div>
-                <form id="login-form" class="space-y-4">
-                    <div>
-                        <input type="password" id="password" 
-                            class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:border-purple-400 focus:ring-2 focus:ring-purple-200 outline-none transition"
-                            placeholder="请输入密码" required>
+                <div class="retro-window-yellow" style="border: 1px solid var(--dp-color-ink); padding: 14px; margin-bottom: 8px;">
+                    <div style="font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700; margin-bottom: 4px;">
+                        <span class="retro-ticker-arrow" aria-hidden="true">&gt;&gt;</span> ASTRBOT PLUGIN WEBUI
                     </div>
-                    <button type="submit" 
-                        class="btn-primary w-full py-3 rounded-xl font-medium shadow-lg">
-                        登 录
-                    </button>
-                </form>
-                <p id="login-error" class="text-red-500 text-center mt-4 hidden"></p>
+                    <h1 class="display-hero-title" style="font-size: 42px;">COLLECTIMAGE</h1>
+                    <p style="font-size: 14px; font-weight: 700; margin-top: 6px;">图片收集管理器 · 色指定与原画检片台</p>
+                </div>
+                <div class="retro-well" style="padding: 14px;">
+                    <form id="login-form" style="display: flex; flex-direction: column; gap: 12px;">
+                        <label for="password" style="font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700;">
+                            管理密码
+                        </label>
+                        <input type="password" id="password" class="retro-input" style="width: 100%;" placeholder="请输入 WebUI 管理密码" required>
+                        <button type="submit" class="retro-key retro-key-primary" style="width: 100%; padding: 8px 14px; font-size: 15px;">
+                            <span class="retro-ticker-arrow" aria-hidden="true">-&gt;</span> 登录
+                        </button>
+                    </form>
+                    <p id="login-error" class="hidden" style="margin-top: 10px; background: var(--dp-color-emphasis); color: var(--dp-color-ink); border: 1px solid var(--dp-color-ink); padding: 6px 8px; font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700;"></p>
+                </div>
             </div>
         </div>
 
-        <!-- 主页面 -->
-        <div id="main-page" class="hidden h-screen flex flex-col">
-            <!-- Header -->
-            <header class="glass-card shadow-sm z-40 flex-shrink-0">
-                <div class="mx-auto px-4 lg:px-8 py-3 md:py-4">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 bg-gradient-to-br from-purple-400 to-pink-400 rounded-xl flex items-center justify-center flex-shrink-0">
-                                <i data-lucide="image" class="w-5 h-5 text-white"></i>
-                            </div>
-                            <h1 class="text-lg md:text-xl font-bold text-gray-800 truncate">图片收集管理器</h1>
+        <!-- 主页面 (12-Column Offset Retro Desktop + Cel-Check Inspection Desk) -->
+        <div id="main-page" class="hidden">
+            <div class="desktop-shell">
+                <!-- Window 1: Broad Yellow Launch Window (Cols 1-8) -->
+                <header class="retro-window win-launch">
+                    <div class="retro-titlebar">
+                        <div class="retro-titlebar-left">
+                            <span class="retro-ornament-box" aria-hidden="true"></span>
+                            <span>图片收集管理器 · 审片工作台</span>
                         </div>
-                        <div class="flex items-center space-x-2 md:space-x-4 flex-shrink-0">
-                            <span id="image-count" class="text-gray-600 text-sm hidden sm:inline">共 0 张图片</span>
-                            <button id="logout-btn" class="px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition text-sm">
-                                <i data-lucide="log-out" class="w-4 h-4 inline mr-1"></i><span class="hidden sm:inline">退出</span>
-                            </button>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-family: var(--dp-typography-mono); font-size: 11px;">X-SHEET</span>
+                            <button id="theme-toggle-btn" class="retro-key theme-toggle-btn" type="button" aria-label="切换亮色或暗色模式">◐ 暗色模式</button>
+                            <button id="logout-btn" class="retro-key" style="padding: 1px 8px; font-size: 11px;" aria-label="退出登录">退出登录</button>
                         </div>
                     </div>
-                </div>
-            </header>
-
-            <div class="mx-auto px-4 lg:px-8 pt-3 md:pt-4 flex-1 flex flex-col overflow-hidden w-full">
-                <!-- 顶部导航 -->
-                <div class="flex gap-2 mb-3 md:mb-4 overflow-x-auto flex-shrink-0">
-                    <button class="tab-btn active px-3 md:px-4 py-2 rounded-lg bg-purple-100 text-purple-700 font-medium whitespace-nowrap text-sm md:text-base" data-tab="images">
-                        <i data-lucide="images" class="w-4 h-4 inline mr-1"></i>图片管理
-                    </button>
-                    <button class="tab-btn px-3 md:px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600 whitespace-nowrap text-sm md:text-base" data-tab="aliases">
-                        <i data-lucide="tags" class="w-4 h-4 inline mr-1"></i>别名管理
-                    </button>
-                    <button class="tab-btn px-3 md:px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600 whitespace-nowrap text-sm md:text-base" data-tab="config">
-                        <i data-lucide="settings" class="w-4 h-4 inline mr-1"></i>插件配置
-                    </button>
-                    <button class="tab-btn px-3 md:px-4 py-2 rounded-lg hover:bg-white/50 text-gray-600 whitespace-nowrap text-sm md:text-base" data-tab="logs">
-                        <i data-lucide="scroll-text" class="w-4 h-4 inline mr-1"></i>插件日志
-                    </button>
-                </div>
-
-                <div class="flex flex-col md:flex-row gap-3 md:gap-6 flex-1 overflow-hidden">
-                    <!-- 侧边栏: 移动端水平滚动，桌面端垂直固定 -->
-                    <aside id="sidebar" class="flex-shrink-0 md:w-48">
-                        <div class="glass-card rounded-xl p-2 md:p-4">
-                            <div class="flex md:flex-col gap-1 md:gap-2 overflow-x-auto md:overflow-visible">
-                                <button class="sidebar-item active flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="all">
-                                    <i data-lucide="images" class="w-4 h-4 md:w-5 md:h-5 text-purple-500 shrink-0"></i>
-                                    <span>全部图片</span>
-                                </button>
-                                <button class="sidebar-item flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="confirmed">
-                                    <i data-lucide="check-circle" class="w-4 h-4 md:w-5 md:h-5 text-green-500 shrink-0"></i>
-                                    <span>已确认</span>
-                                </button>
-                                <button class="sidebar-item flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="unconfirmed">
-                                    <i data-lucide="alert-circle" class="w-4 h-4 md:w-5 md:h-5 text-amber-500 shrink-0"></i>
-                                    <span>未确认</span>
-                                </button>
-                                <button class="sidebar-item flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 rounded-lg text-left whitespace-nowrap text-sm md:text-base md:w-full" data-filter="stats">
-                                    <i data-lucide="bar-chart-3" class="w-4 h-4 md:w-5 md:h-5 text-blue-500 shrink-0"></i>
-                                    <span>统计</span>
-                                </button>
+                    <div class="launch-body">
+                        <div class="launch-sub-cluster">
+                            <span class="launch-sub-tag"><span class="retro-ticker-arrow" aria-hidden="true">&gt;&gt;</span> CEL-CHECK INSPECTION DESK // 色指定・审片校对台</span>
+                            <h1 class="display-hero-title">COLLECTIMAGE</h1>
+                            <p style="font-size: 14px; font-weight: 700;">群聊二次元插画自动化收集 · 角色×作品别名归档工作台</p>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-end;">
+                            <div style="background: var(--dp-color-bevel-light); border: 2px solid var(--dp-color-ink); padding: 6px 10px; font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700;">
+                                快捷键：空格确认当前图片
+                            </div>
+                            <div style="display: flex; gap: 6px;">
+                                <button id="import-btn" class="retro-key retro-key-primary" type="button">导入图片</button>
                             </div>
                         </div>
+                    </div>
+                </header>
+
+                <!-- Window 2: Compact Monitor-Like Facts Panel (Cols 9-12) -->
+                <section class="retro-window win-monitor" aria-label="馆藏与校对进度监视器">
+                    <div class="retro-titlebar retro-titlebar-accent">
+                        <div class="retro-titlebar-left">
+                            <span class="retro-ornament-box" aria-hidden="true"></span>
+                            <span>馆藏概览</span>
+                        </div>
+                        <span id="image-count" style="font-family: var(--dp-typography-mono); font-size: 11px;">共 0 张图片</span>
+                    </div>
+                    <div class="monitor-screen retro-well-dark">
+                        <div class="monitor-row">
+                            <span>全部图片</span>
+                            <strong aria-live="polite" id="monitor-total">—</strong>
+                        </div>
+                        <div class="monitor-row">
+                            <span>已确认</span>
+                            <strong id="monitor-confirmed" class="monitor-num-accent">—</strong>
+                        </div>
+                        <div class="monitor-row">
+                            <span>待校对</span>
+                            <strong id="monitor-unconfirmed">—</strong>
+                        </div>
+                        <div class="segmented-meter" id="monitor-segmented-bar" title="已归档 / 待校对分段进度">
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                            <span class="seg-block"></span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Window 3: Bright Pink Strip Spanning Beneath (Cols 1-12) -->
+                <nav class="win-pink-strip" aria-label="主工作域与检片状态切换">
+                    <div class="strip-nav-group">
+                        <span style="font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700; background: var(--dp-color-ink); color: var(--dp-color-bevel-light); padding: 4px 8px;">
+                            WORK_DOMAIN:
+                        </span>
+                        <button class="tab-btn retro-key active" data-tab="images" type="button">图片管理</button>
+                        <button class="tab-btn retro-key" data-tab="aliases" type="button">别名管理</button>
+                        <button class="tab-btn retro-key" data-tab="config" type="button">插件配置</button>
+                        <button class="tab-btn retro-key" data-tab="logs" type="button">插件日志</button>
+                    </div>
+
+                    <!-- 侧边筛选整合为紧凑律表拨片组 -->
+                    <aside id="sidebar" class="strip-filter-group" aria-label="检片确认状态筛选">
+                        <span style="font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700;">FILTER:</span>
+                        <button class="sidebar-item retro-key active" data-filter="all" type="button">全部图片</button>
+                        <button class="sidebar-item retro-key" data-filter="unconfirmed" type="button">未确认</button>
+                        <button class="sidebar-item retro-key" data-filter="confirmed" type="button">已确认</button>
+                        <button class="sidebar-item retro-key" data-filter="stats" type="button">统计</button>
                     </aside>
+                </nav>
 
-                    <!-- 主内容 -->
-                    <main class="flex-1 min-w-0 flex flex-col overflow-hidden">
-                        <!-- 图片管理内容 -->
-                        <div id="tab-images" class="tab-content flex flex-col overflow-hidden flex-1">
-                            <!-- 搜索栏 -->
-                            <div class="glass-card rounded-xl p-3 md:p-4 mb-3 md:mb-4 flex-shrink-0">
-                                <div class="flex flex-wrap gap-2 md:gap-3">
-                                    <input type="text" id="search-keyword" placeholder="搜索角色/作品/标签..." 
-                                        class="flex-1 min-w-0 px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition">
-                                    <button id="search-btn" class="btn-primary px-6 py-2 rounded-lg font-medium">
-                                        <i data-lucide="search" class="w-4 h-4 inline mr-1"></i>搜索
-                                    </button>
-                                    <button id="import-btn" class="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg font-medium shadow hover:shadow-lg transition flex items-center gap-1">
-                                        <i data-lucide="upload" class="w-4 h-4"></i>
-                                        <span class="hidden sm:inline">导入</span>
-                                    </button>
+                <!-- Window 4: Capability Workspace Window (Cols 1-12) -->
+                <main class="win-workspace">
+                    <!-- TAB 1: 图片管理 (4列检片网格 + 右侧常驻检片校对槽) -->
+                    <div id="tab-images" class="tab-content">
+                        <div class="cel-desk-layout">
+                            <!-- Left Column: Search + Batch + 4-Col Picture Windows + Pagination -->
+                            <div class="retro-window">
+                                <div class="retro-titlebar">
+                                    <div class="retro-titlebar-left">
+                                        <span class="retro-ornament-box" aria-hidden="true"></span>
+                                        <span>图片库</span>
+                                    </div>
+                                    <span id="grid-status-hint" style="font-family: var(--dp-typography-mono); font-size: 11px;">MODE: ALL_FRAMES</span>
                                 </div>
-                            </div>
 
-                            <!-- 批量操作栏 -->
-                            <div id="batch-operations" class="glass-card rounded-xl p-3 md:p-4 mb-4 hidden">
-                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                                    <div class="flex items-center gap-4">
-                                        <label class="flex items-center gap-2 cursor-pointer">
-                                            <input type="checkbox" id="select-all" class="w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400">
-                                            <span class="text-sm text-gray-600">全选</span>
+                                <!-- 搜索与快捷别名栏 -->
+                                <div class="toolbar-well">
+                                    <div class="search-bar-group">
+                                        <label for="search-keyword" style="font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700;">QUERY:</label>
+                                        <input type="text" id="search-keyword" class="retro-input" style="flex: 1;" placeholder="搜索角色、作品或标签">
+                                        <button id="search-btn" class="retro-key retro-key-yellow" type="button">
+                                            <span class="retro-ticker-arrow" aria-hidden="true">&gt;</span> 搜索
+                                        </button>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                        <button type="button" class="retro-key quick-query-btn" data-q="辻倉朱比華" style="font-size: 11px; padding: 4px 8px;">辻倉朱比華⇄anemoi</button>
+                                        <button type="button" class="retro-key quick-query-btn" data-q="Summer Pockets" style="font-size: 11px; padding: 4px 8px;">Summer Pockets</button>
+                                        <button type="button" class="retro-key quick-query-btn" data-q="" style="font-size: 11px; padding: 4px 8px;">重置</button>
+                                    </div>
+                                </div>
+
+                                <!-- 批量操作栏 -->
+                                <div id="batch-operations" class="toolbar-well hidden" style="background-color: var(--dp-color-highlight);">
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; font-size: 13px;">
+                                            <input type="checkbox" id="select-all" style="width: 16px; height: 16px;">
+                                            <span>全选本页</span>
                                         </label>
-                                        <span id="selected-count" class="text-sm text-gray-500">已选择 0 张图片</span>
+                                        <span id="selected-count" style="font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700;">已选择 0 张图片</span>
                                     </div>
-                                    <div class="flex gap-2 w-full sm:w-auto">
-                                        <button id="batch-confirm-btn" class="flex-1 sm:flex-none px-3 md:px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition flex items-center justify-center gap-1 text-sm">
-                                            <i data-lucide="check-circle" class="w-4 h-4"></i>
-                                            确认
-                                        </button>
-                                        <button id="batch-unconfirm-btn" class="flex-1 sm:flex-none px-3 md:px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition flex items-center justify-center gap-1 text-sm">
-                                            <i data-lucide="alert-circle" class="w-4 h-4"></i>
-                                            取消
-                                        </button>
-                                        <button id="batch-delete-btn" class="flex-1 sm:flex-none px-3 md:px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition flex items-center justify-center gap-1 text-sm">
-                                            <i data-lucide="trash-2" class="w-4 h-4"></i>
-                                            删除
-                                        </button>
+                                    <div style="display: flex; gap: 6px;">
+                                        <button id="batch-confirm-btn" class="retro-key retro-key-teal" type="button">✓ 批量确认归档</button>
+                                        <button id="batch-unconfirm-btn" class="retro-key retro-key-yellow" type="button">! 批量取消确认</button>
+                                        <button id="batch-delete-btn" class="retro-key retro-key-pink" type="button">✕ 批量删除</button>
                                     </div>
+                                </div>
+
+                                <!-- 图片列表井 (滚动动态加载) -->
+                                <div id="grid-wrapper" class="retro-well cel-grid-well">
+                                    <div id="image-grid"></div>
+                                    <div id="scroll-load-sentinel" class="scroll-sentinel" aria-live="polite">
+                                        <span id="scroll-load-status">向下滚动自动加载更多图片...</span>
+                                        <button id="load-more-btn" class="retro-key" type="button" style="padding: 4px 12px !important; min-height: 32px; font-size: 13px !important;">加载更多</button>
+                                    </div>
+                                </div>
+
+                                <!-- 翻页控制条 (隐藏保留 DOM 兼容，主交互已切换为无限滚动加载) -->
+                                <div class="toolbar-well hidden" style="margin-top: 8px; margin-bottom: 0; justify-content: center;">
+                                    <button id="first-page" class="retro-key" type="button" title="首页">|&lt; 首页</button>
+                                    <button id="prev-page" class="retro-key" type="button" title="上一页">&lt; 上一页</button>
+                                    <div style="display: flex; align-items: center; gap: 6px; font-family: var(--dp-typography-mono); font-size: 13px; font-weight: 700; padding: 0 8px;">
+                                        <span>PAGE</span>
+                                        <input type="number" id="page-input" min="1" value="1" class="retro-input" style="width: 64px; text-align: center; padding: 3px 6px;">
+                                        <span>/ <span id="total-pages">1</span></span>
+                                        <button id="go-page" class="retro-key retro-key-yellow" type="button">跳转</button>
+                                    </div>
+                                    <button id="next-page" class="retro-key" type="button" title="下一页">下一页 &gt;</button>
+                                    <button id="last-page" class="retro-key" type="button" title="尾页">尾页 &gt;|</button>
                                 </div>
                             </div>
 
-                            <!-- 图片列表 -->
-                            <div id="grid-wrapper" class="flex-1 overflow-hidden min-h-0">
-                                <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 md:gap-4 h-full content-start"></div>
-                            </div>
-                            
-                            <!-- 导入弹窗 -->
-                            <div id="import-modal" class="fixed inset-0 z-50 hidden">
-                                <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
-                                <div class="relative z-10 flex items-center justify-center min-h-screen p-4 pointer-events-none">
-                                    <div class="glass-card rounded-2xl shadow-2xl w-full max-w-md p-6 pointer-events-auto">
-                                        <h3 class="text-lg font-bold text-gray-800 mb-4">导入图片</h3>
-                                        <div class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-purple-400 transition cursor-pointer" id="drop-zone">
-                                            <input type="file" id="file-input" accept="image/*" multiple class="hidden">
-                                            <i data-lucide="image-plus" class="w-12 h-12 mx-auto text-gray-400 mb-4"></i>
-                                            <p class="text-gray-600 mb-2">点击或拖拽图片到此处</p>
-                                            <p class="text-sm text-gray-400">支持 JPG/PNG/GIF/WebP/BMP 格式</p>
+                            <!-- Right Column: Permanent Cel-Check Inspector Dock (390px) -->
+                            <aside class="retro-window inspector-window" aria-label="原画检片校对槽">
+                                <div class="retro-titlebar retro-titlebar-accent">
+                                    <div class="retro-titlebar-left">
+                                        <span class="retro-ornament-box" aria-hidden="true"></span>
+                                        <span>图片详情</span>
+                                    </div>
+                                    <button type="button" id="open-modal-zoom-btn" class="retro-key" style="padding: 1px 6px; font-size: 11px;">查看大图</button>
+                                </div>
+
+                                <!-- 主操作：盖章确认归档 + 保存 + 重分析 -->
+                                <div class="inspector-actions" style="display: flex; flex-direction: column; gap: 6px;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                                        <button id="confirm-btn" class="retro-key retro-key-teal" type="button" style="padding: 8px; font-size: 14px;">
+                                            确认归档
+                                        </button>
+                                        <button id="unconfirm-btn" class="retro-key" type="button" style="padding: 8px; font-size: 14px;">
+                                            取消确认
+                                        </button>
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                                        <button id="save-detail-btn" class="retro-key retro-key-primary" type="button">
+                                            保存角色与描述
+                                        </button>
+                                        <button id="reanalyze-btn" class="retro-key" type="button">
+                                            ↻ VLM 重分析
+                                        </button>
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                                        <button id="recognize-btn" class="retro-key" type="button">
+                                            识别角色
+                                        </button>
+                                        <button id="delete-btn" class="retro-key" type="button">
+                                            删除图片
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- 选中原画缩略与元数据井 -->
+                                <div class="retro-well inspector-preview-grid">
+                                    <div class="inspector-thumb-box retro-well">
+                                        <img id="detail-image" src="" alt="当前检片原画预览">
+                                    </div>
+                                    <div class="inspector-kv-list">
+                                        <div class="inspector-kv-row">
+                                            <span>编号</span>
+                                            <strong id="dock-frame-id">#--</strong>
                                         </div>
-                                        <div id="file-list" class="mt-4 space-y-2 max-h-40 overflow-y-auto hidden"></div>
-                                        <div class="mt-6 flex gap-3 justify-end">
-                                            <button id="cancel-import-btn" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
-                                                取消
-                                            </button>
-                                            <button id="start-import-btn" class="btn-primary px-6 py-2 rounded-lg font-medium">
-                                                <i data-lucide="upload" class="w-4 h-4 inline mr-1"></i>开始导入
-                                            </button>
+                                        <div class="inspector-kv-row">
+                                            <span>文件</span>
+                                            <strong id="detail-filename" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">未选择</strong>
+                                        </div>
+                                        <div class="inspector-kv-row">
+                                            <span>群号</span>
+                                            <strong id="detail-group">--</strong>
+                                        </div>
+                                        <div class="inspector-kv-row">
+                                            <span>发送者</span>
+                                            <strong id="detail-sender">--</strong>
+                                        </div>
+                                        <div class="inspector-kv-row">
+                                            <span>收录时间</span>
+                                            <strong id="detail-time">--</strong>
+                                        </div>
+                                        <div class="inspector-kv-row">
+                                            <span>状态</span>
+                                            <strong id="dock-confirm-status">待选定</strong>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                            
-                            <!-- 翻页 -->
-                            <div class="py-2 md:py-3 flex items-center justify-center gap-1 sm:gap-2 flex-shrink-0">
-                                <button id="first-page" class="hidden sm:block p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="首页">
-                                    <i data-lucide="chevrons-left" class="w-5 h-5"></i>
-                                </button>
-                                <button id="prev-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="上一页">
-                                    <i data-lucide="chevron-left" class="w-5 h-5"></i>
-                                </button>
-                                <div class="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
-                                    <span class="text-gray-600 text-sm">第</span>
-                                    <input type="number" id="page-input" min="1" 
-                                        class="w-14 sm:w-16 px-1 sm:px-2 py-1 text-center rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm">
-                                    <span class="text-gray-600 text-sm">/ <span id="total-pages">1</span> 页</span>
-                                    <button id="go-page" class="hidden sm:block px-3 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition text-sm">
-                                        跳转
-                                    </button>
-                                </div>
-                                <button id="next-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="下一页">
-                                    <i data-lucide="chevron-right" class="w-5 h-5"></i>
-                                </button>
-                                <button id="last-page" class="hidden sm:block p-2 rounded-lg hover:bg-white/50 disabled:opacity-50" title="尾页">
-                                    <i data-lucide="chevrons-right" class="w-5 h-5"></i>
-                                </button>
-                            </div>
-                        </div>
 
-                        <!-- 别名管理 -->
-                        <div id="tab-aliases" class="tab-content hidden flex-1 overflow-y-auto">
-                            <div class="glass-card rounded-xl p-3 md:p-4 mb-4">
-                                <div class="flex flex-wrap gap-2 md:gap-3 items-center">
-                                    <input type="text" id="search-alias" placeholder="搜索别名..." 
-                                        class="flex-1 min-w-0 w-full sm:w-auto px-3 md:px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm md:text-base">
-                                    <select id="alias-type-filter" class="px-3 md:px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm md:text-base">
-                                        <option value="">全部类型</option>
-                                        <option value="character">角色</option>
-                                        <option value="work">作品</option>
-                                    </select>
-                                    <select id="alias-page-size" class="hidden sm:block px-3 md:px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none text-sm md:text-base">
-                                        <option value="25">25条/页</option>
-                                        <option value="50">50条/页</option>
-                                        <option value="100">100条/页</option>
-                                    </select>
-                                    <button id="search-alias-btn" class="btn-primary px-3 md:px-4 py-2 rounded-lg text-sm md:text-base">
-                                        <i data-lucide="search" class="w-4 h-4 inline mr-1"></i>搜索
-                                    </button>
-                                    <button id="import-alias-btn" class="px-3 md:px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-sm md:text-base">
-                                        <i data-lucide="upload" class="w-4 h-4 inline mr-1"></i>导入
-                                    </button>
-                                    <button id="add-alias-btn" class="btn-primary px-3 md:px-4 py-2 rounded-lg text-sm md:text-base">
-                                        <i data-lucide="plus" class="w-4 h-4 inline mr-1"></i>添加
-                                    </button>
-                                </div>
-                            </div>
-                            <div id="import-progress" class="hidden glass-card rounded-xl p-4 mb-4">
-                                <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
-                                    <div id="progress-fill" class="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300" style="width: 0%"></div>
-                                </div>
-                                <div class="flex justify-between items-center mt-2">
-                                    <span id="progress-text" class="text-sm text-gray-600">导入中...</span>
-                                    <button id="stop-import-btn" class="px-3 py-1 bg-red-100 text-red-600 rounded-lg text-sm">停止</button>
-                                </div>
-                            </div>
-                            <div id="alias-list" class="space-y-2"></div>
-                            <div class="mt-4 flex justify-center">
-                                <div class="flex items-center gap-2">
-                                    <button id="alias-prev-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50">
-                                        <i data-lucide="chevron-left" class="w-5 h-5"></i>
-                                    </button>
-                                    <span id="alias-page-info" class="px-4 text-gray-600">第 1 页</span>
-                                    <button id="alias-next-page" class="p-2 rounded-lg hover:bg-white/50 disabled:opacity-50">
-                                        <i data-lucide="chevron-right" class="w-5 h-5"></i>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- 统计 -->
-                        <div id="tab-stats" class="tab-content hidden flex-1 overflow-y-auto">
-                            <div class="glass-card rounded-xl p-6">
-                                <div class="flex items-center justify-between mb-6">
-                                    <h2 class="text-xl font-bold text-gray-800">图片统计</h2>
-                                    <select id="stats-days" class="px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                                        <option value="7">最近 7 天</option>
-                                        <option value="15">最近 15 天</option>
-                                        <option value="30">最近 30 天</option>
-                                    </select>
-                                </div>
-                                
-                                <!-- 统计卡片 -->
-                                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                                    <div class="bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl p-4 text-white">
-                                        <div class="text-sm opacity-80 mb-1">总图片数</div>
-                                        <div id="stats-total" class="text-3xl font-bold">0</div>
+                                <!-- 角色 × 作品 JSON 编辑器 -->
+                                <div class="inspector-section">
+                                    <div class="inspector-label">
+                                        <span>角色与作品</span>
+                                        <button type="button" id="add-character-btn" class="retro-key retro-key-yellow" style="padding: 2px 8px; font-size: 11px;">+ 添加角色</button>
                                     </div>
-                                    <div class="bg-gradient-to-br from-green-500 to-teal-500 rounded-xl p-4 text-white">
-                                        <div class="text-sm opacity-80 mb-1">已确认</div>
-                                        <div id="stats-confirmed" class="text-3xl font-bold">0</div>
-                                    </div>
-                                    <div class="bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl p-4 text-white">
-                                        <div class="text-sm opacity-80 mb-1">未确认</div>
-                                        <div id="stats-unconfirmed" class="text-3xl font-bold">0</div>
-                                    </div>
-                                    <div class="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-4 text-white">
-                                        <div class="text-sm opacity-80 mb-1">今日新增</div>
-                                        <div id="stats-today" class="text-3xl font-bold">0</div>
+                                    <div id="character-editor" class="retro-well" style="padding: 8px;">
+                                        <div class="character-list" style="display: flex; flex-direction: column; gap: 6px;"></div>
                                     </div>
                                 </div>
 
-                                <!-- 图表 -->
-                                <div class="bg-white/50 rounded-xl p-4">
-                                    <h3 class="text-lg font-semibold text-gray-700 mb-4">每日新增图片趋势</h3>
-                                    <div class="h-64 overflow-x-auto">
-                                        <canvas id="stats-chart" class="min-w-full"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- 插件配置 -->
-                        <div id="tab-config" class="tab-content hidden flex-1 overflow-y-auto">
-                            <div class="glass-card rounded-xl p-6">
-                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 mb-6">
-                                    <div>
-                                        <h2 class="text-xl font-bold text-gray-800">插件配置</h2>
-                                        <p class="text-gray-500 text-sm mt-1">修改配置后点击保存，插件将自动重启以应用新配置</p>
-                                    </div>
-                                    <div class="flex gap-2 w-full sm:w-auto">
-                                        <button id="reset-config-btn" class="flex-1 sm:flex-none px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition text-sm">
-                                            <i data-lucide="rotate-ccw" class="w-4 h-4 inline mr-1"></i>重置
-                                        </button>
-                                        <button id="save-config-btn" class="flex-1 sm:flex-none btn-primary px-6 py-2 rounded-lg font-medium text-sm">
-                                            <i data-lucide="save" class="w-4 h-4 inline mr-1"></i>保存配置
-                                        </button>
-                                    </div>
-                                </div>
-                                
-                                <div id="config-form" class="space-y-6">
-                                    <div class="flex items-center justify-center py-12 text-gray-400">
-                                        <i data-lucide="loader-2" class="w-8 h-8 animate-spin mr-2"></i>
-                                        <span>加载配置中...</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- 插件日志 -->
-                        <div id="tab-logs" class="tab-content hidden flex-1 overflow-hidden">
-                            <div class="glass-card rounded-xl p-4 md:p-6 h-full flex flex-col">
-                                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 flex-shrink-0">
-                                    <div>
-                                        <h2 class="text-xl font-bold text-gray-800">插件日志</h2>
-                                        <p class="text-gray-500 text-sm mt-1">实时刷新 CollectImage 相关日志，便于观察收图、分析和 WebUI 操作状态</p>
-                                    </div>
-                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-gray-600">
-                                        <input type="checkbox" id="log-auto-scroll" checked class="w-5 h-5 rounded border-gray-300 text-purple-500 focus:ring-purple-400">
-                                        自动滚动
+                                <!-- 一句话描述编辑 -->
+                                <div class="inspector-section">
+                                    <label for="detail-description" class="inspector-label">
+                                        <span>画面描述</span>
                                     </label>
+                                    <textarea id="detail-description" class="retro-input" style="width:100%;min-height:72px;resize:vertical" placeholder="图片描述" rows="3"></textarea>
                                 </div>
-                                <pre id="log-output" class="flex-1 min-h-0 overflow-y-auto bg-gray-950 text-green-100 rounded-xl p-4 text-xs md:text-sm leading-6 whitespace-pre-wrap font-mono"></pre>
+
+                                <!-- 7维外观特征标签 -->
+                                <div class="inspector-section">
+                                    <div class="inspector-label">
+                                        <span>标签</span>
+                                    </div>
+                                    <div id="detail-tags" class="retro-well" style="padding: 6px; min-height: 54px; max-height: 110px; overflow-y: auto;"></div>
+                                </div>
+
+                            </aside>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: 别名管理 (Retro Lexicon Window) -->
+                    <div id="tab-aliases" class="tab-content hidden">
+                        <div class="retro-window">
+                            <div class="retro-titlebar">
+                                <div class="retro-titlebar-left">
+                                    <span class="retro-ornament-box" aria-hidden="true"></span>
+                                    <span>角色与作品别名</span>
+                                </div>
+                                <span style="font-family: var(--dp-typography-mono); font-size: 11px;">中日文别名映射</span>
+                            </div>
+
+                            <div class="toolbar-well">
+                                <input type="text" id="search-alias" class="retro-input" style="flex: 1; min-width: 200px;" placeholder="搜索日文原名或中文简体别名...">
+                                <select id="alias-type-filter" class="retro-input" aria-label="别名类型筛选">
+                                    <option value="">全部类型 (ALL)</option>
+                                    <option value="character">角色 (CHARACTER)</option>
+                                    <option value="work">作品 (WORK)</option>
+                                </select>
+                                <select id="alias-page-size" class="retro-input" aria-label="每页条数">
+                                    <option value="25">25条/页</option>
+                                    <option value="50">50条/页</option>
+                                    <option value="100">100条/页</option>
+                                </select>
+                                <button id="search-alias-btn" class="retro-key retro-key-yellow" type="button">搜索别名</button>
+                                <button id="import-alias-btn" class="retro-key" type="button">导入 aliases.json</button>
+                                <button id="add-alias-btn" class="retro-key retro-key-primary" type="button">+ 添加别名</button>
+                            </div>
+
+                            <!-- 批量导入进度条 -->
+                            <div id="import-progress" class="hidden retro-window-yellow" style="border: 1px solid var(--dp-color-ink); padding: 10px; margin-bottom: 8px;">
+                                <div class="retro-well" style="height: 16px; overflow: hidden;">
+                                    <div id="progress-fill" style="height: 100%; width: 0%; background: var(--dp-color-accent);"></div>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-family: var(--dp-typography-mono); font-size: 12px;">
+                                    <span id="progress-text">导入中...</span>
+                                    <button id="stop-import-btn" class="retro-key retro-key-pink" type="button">停止导入</button>
+                                </div>
+                            </div>
+
+                            <div id="alias-list" class="retro-well" style="padding: 10px; min-height: 420px; display: flex; flex-direction: column; gap: 6px;"></div>
+
+                            <div class="toolbar-well" style="margin-top: 8px; margin-bottom: 0; justify-content: center;">
+                                <button id="alias-prev-page" class="retro-key" type="button">&lt; 上一页</button>
+                                <span id="alias-page-info" style="font-family: var(--dp-typography-mono); font-size: 13px; font-weight: 700; padding: 0 12px;">第 1 页</span>
+                                <button id="alias-next-page" class="retro-key" type="button">下一页 &gt;</button>
                             </div>
                         </div>
-                    </main>
+                    </div>
+
+                    <!-- TAB 3: 统计报表 (GitHub Contributions Heatmap) -->
+                    <div id="tab-stats" class="tab-content hidden">
+                        <div class="retro-window">
+                            <div class="retro-titlebar">
+                                <div class="retro-titlebar-left">
+                                    <span class="retro-ornament-box" aria-hidden="true"></span>
+                                    <span>图片统计 · 收录贡献热力图</span>
+                                </div>
+                                <select id="stats-days" class="retro-input" style="padding: 4px 10px !important; font-size: 14px !important;" aria-label="统计天数范围">
+                                    <option value="365" selected>最近 1 年 (365 天)</option>
+                                    <option value="180">最近半年 (180 天)</option>
+                                    <option value="90">最近 90 天</option>
+                                    <option value="30">最近 30 天</option>
+                                </select>
+                            </div>
+
+                            <div class="stats-kpi-grid" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px;">
+                                <div class="retro-window" style="padding: 14px;">
+                                    <div style="font-size: 13px; color: var(--dp-color-ink-secondary); font-weight: 600;">总图片数</div>
+                                    <div id="stats-total" class="display-hero-title" style="font-size: 34px; margin-top: 4px;">0</div>
+                                </div>
+                                <div class="retro-window" style="padding: 14px;">
+                                    <div style="font-size: 13px; color: var(--dp-color-ink-secondary); font-weight: 600;">已确认归档</div>
+                                    <div id="stats-confirmed" class="display-hero-title" style="font-size: 34px; margin-top: 4px; color: var(--dp-color-accent);">0</div>
+                                </div>
+                                <div class="retro-window" style="padding: 14px;">
+                                    <div style="font-size: 13px; color: var(--dp-color-ink-secondary); font-weight: 600;">待确认校对</div>
+                                    <div id="stats-unconfirmed" class="display-hero-title" style="font-size: 34px; margin-top: 4px;">0</div>
+                                </div>
+                                <div class="retro-window" style="padding: 14px;">
+                                    <div style="font-size: 13px; color: var(--dp-color-ink-secondary); font-weight: 600;">今日新增收录</div>
+                                    <div id="stats-today" class="display-hero-title" style="font-size: 34px; margin-top: 4px; color: #1a7f37;">0</div>
+                                </div>
+                            </div>
+
+                            <div class="gh-contrib-card">
+                                <div class="gh-contrib-header">
+                                    <div>
+                                        <h3 id="gh-contrib-summary" style="font-size: 16px; font-weight: 600; color: var(--dp-color-ink);">
+                                            过去一年共收录 0 张插画
+                                        </h3>
+                                        <p id="gh-contrib-sub" style="font-size: 13px; color: var(--dp-color-ink-secondary); margin-top: 2px;">
+                                            悬停或点击方格可查看单日收录数量
+                                        </p>
+                                    </div>
+                                    <div class="gh-contrib-meta" id="gh-contrib-streaks"></div>
+                                </div>
+
+                                <div class="gh-heatmap-scroll">
+                                    <div id="gh-contrib-graph" class="gh-heatmap-container" role="region" aria-label="每日新增图片 GitHub 贡献热力图"></div>
+                                </div>
+
+                                <div class="gh-contrib-footer">
+                                    <span id="gh-contrib-selected-day" style="font-size: 13px; color: var(--dp-color-ink-secondary);">
+                                        移入方格查看某日收录详情
+                                    </span>
+                                    <div class="gh-legend" aria-label="热力图颜色图例">
+                                        <span>少</span>
+                                        <span class="gh-cell gh-level-0" title="0 张"></span>
+                                        <span class="gh-cell gh-level-1" title="少量收录"></span>
+                                        <span class="gh-cell gh-level-2" title="中量收录"></span>
+                                        <span class="gh-cell gh-level-3" title="较多收录"></span>
+                                        <span class="gh-cell gh-level-4" title="大量收录"></span>
+                                        <span>多</span>
+                                    </div>
+                                </div>
+                                <canvas id="stats-chart" class="hidden" aria-hidden="true"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 4: 插件配置 (左侧配置项 + 右侧分类目录) -->
+                    <div id="tab-config" class="tab-content hidden">
+                        <div class="retro-window">
+                            <div class="retro-titlebar">
+                                <div class="retro-titlebar-left">
+                                    <span class="retro-ornament-box" aria-hidden="true"></span>
+                                    <span>插件配置</span>
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <button id="reset-config-btn" class="retro-key" type="button">重置</button>
+                                    <button id="save-config-btn" class="retro-key retro-key-primary" type="button">保存配置</button>
+                                </div>
+                            </div>
+
+                            <div class="retro-window-yellow" style="border: 1px solid var(--dp-color-rule); padding: 10px 14px; margin-bottom: 16px; font-size: 14px; color: var(--dp-color-ink-secondary);">
+                                修改后点击右上角“保存配置”，部分设置需重启插件生效。可点击右侧分类快速筛选或定位配置项。
+                            </div>
+
+                            <div class="config-split-layout">
+                                <!-- 左侧：当前分类下的具体配置项 -->
+                                <div id="config-form" class="config-items-pane">
+                                    <div style="padding: 24px; text-align: center; color: var(--dp-color-ink-secondary);">
+                                        正在读取配置定义 (_conf_schema.json)...
+                                    </div>
+                                </div>
+                                <!-- 右侧：配置分类类名导航栏 -->
+                                <aside id="config-category-nav" class="config-category-sidebar" aria-label="配置项分类导航"></aside>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 5: 插件日志 (CRT Monitor Log Stream) -->
+                    <div id="tab-logs" class="tab-content hidden">
+                        <div class="retro-window">
+                            <div class="retro-titlebar retro-titlebar-accent">
+                                <div class="retro-titlebar-left">
+                                    <span class="retro-ornament-box" aria-hidden="true"></span>
+                                    <span>插件日志</span>
+                                </div>
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-family: var(--dp-typography-mono); font-size: 11px;">
+                                    <input type="checkbox" id="log-auto-scroll" checked>
+                                    <span>自动滚动</span>
+                                </label>
+                            </div>
+                            <pre id="log-output" class="retro-well-dark" style="height: 520px; overflow-y: auto; padding: 12px; font-family: var(--dp-typography-mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap;"></pre>
+                        </div>
+                    </div>
+                </main>
+
+                <!-- Broad Footer with Folder-Like Link Headings -->
+                <footer class="retro-window desktop-footer">
+                    <div>
+                        <span class="folder-heading">处理流程</span>
+                        <div>图片筛选 · 角色识别 · 标签归档</div>
+                    </div>
+                    <div>
+                        <span class="folder-heading">快捷操作</span>
+                        <div>Click Card: 检视 | Space: 盖章确认</div>
+                    </div>
+                    <div>
+                        <span class="folder-heading">存储设置</span>
+                        <div>图库与缩略图由插件配置管理</div>
+                    </div>
+                    <div>
+                        <span class="folder-heading">AstrBot 插件</span>
+                        <div>AstrBot Plugin CollectImage</div>
+                    </div>
+                </footer>
+            </div>
+        </div>
+
+        <!-- 导入原画弹窗 (Retro Upload Dialog) -->
+        <div id="import-modal" class="fixed inset-0 z-50 hidden" style="position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.65); padding: 16px;">
+            <div class="retro-window" style="width: 100%; max-width: 480px;">
+                <div class="retro-titlebar">
+                    <div class="retro-titlebar-left">
+                        <span class="retro-ornament-box" aria-hidden="true"></span>
+                        <span>导入图片</span>
+                    </div>
+                </div>
+                <div class="retro-well" style="padding: 18px; text-align: center; cursor: pointer;" id="drop-zone">
+                    <input type="file" id="file-input" accept="image/*" multiple class="hidden">
+                    <div style="font-family: var(--dp-typography-display); font-size: 24px; font-weight: 900; margin-bottom: 6px;">DROP IMAGES HERE</div>
+                    <p style="font-size: 14px; font-weight: 700;">点击或拖拽图片到此处上传入库</p>
+                    <p style="font-family: var(--dp-typography-mono); font-size: 12px; margin-top: 4px;">支持 JPG / PNG / GIF / WebP / BMP 格式</p>
+                </div>
+                <div id="file-list" class="retro-well hidden" style="margin-top: 8px; padding: 8px; max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"></div>
+                <div style="margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;">
+                    <button id="cancel-import-btn" class="retro-key" type="button">取消</button>
+                    <button id="start-import-btn" class="retro-key retro-key-primary" type="button">开始导入</button>
                 </div>
             </div>
         </div>
 
-        <!-- 图片详情弹窗 -->
-        <div id="detail-modal" class="fixed inset-0 z-50 hidden">
-            <div class="modal-overlay absolute inset-0 z-40 cursor-pointer" id="detail-modal-overlay" onclick="handleDetailOverlayClick()"></div>
-            <div class="modal-content relative z-50 flex items-center justify-center min-h-screen p-2 md:p-4 pointer-events-none">
-                <div class="glass-card rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden pointer-events-auto">
-                    <div class="flex justify-between items-center p-3 md:p-4 border-b border-gray-100">
-                        <h2 class="text-lg md:text-xl font-bold text-gray-800">图片详情</h2>
-                        <button class="close p-2 hover:bg-gray-100 rounded-lg transition">
-                            <i data-lucide="x" class="w-5 h-5"></i>
-                        </button>
+        <!-- 大图放大检视弹窗 (保留 detail-modal ID 兼容) -->
+        <div id="detail-modal" class="hidden" style="position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px;">
+            <div class="modal-overlay" id="detail-modal-overlay"  style="position: absolute; inset: 0;"></div>
+            <div class="retro-window" style="position: relative; z-index: 10; width: 100%; max-width: 780px;">
+                <div class="retro-titlebar">
+                    <div class="retro-titlebar-left">
+                        <span class="retro-ornament-box" aria-hidden="true"></span>
+                        <span>查看原图</span>
                     </div>
-                    <div class="p-3 md:p-4 overflow-y-auto max-h-[calc(90vh-140px)]">
-                        <div class="flex flex-col md:flex-row gap-4 md:gap-6">
-                            <div class="w-full md:w-1/2">
-                                <div class="aspect-square rounded-xl overflow-hidden bg-gray-100 max-h-[40vh] md:max-h-none">
-                                    <img id="detail-image" src="" alt="" class="w-full h-full object-contain">
-                                </div>
-                                <div class="mt-3 md:mt-4 space-y-2 text-sm text-gray-600">
-                                    <div class="flex justify-between">
-                                        <span>文件名:</span>
-                                        <span id="detail-filename" class="text-gray-800 font-medium truncate ml-2"></span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                        <span>群号:</span>
-                                        <span id="detail-group" class="text-gray-800"></span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                        <span>发送者:</span>
-                                        <span id="detail-sender" class="text-gray-800"></span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                        <span>时间:</span>
-                                        <span id="detail-time" class="text-gray-800"></span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="w-full md:w-1/2 space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">角色</label>
-                                    <div id="character-editor" class="space-y-2">
-                                        <div class="character-list space-y-2"></div>
-                                        <button type="button" id="add-character-btn" class="text-purple-600 hover:text-purple-700 text-sm flex items-center">
-                                            <i data-lucide="plus" class="w-4 h-4 mr-1"></i>添加角色
-                                        </button>
-                                    </div>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">描述</label>
-                                    <input type="text" id="detail-description" 
-                                        class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none"
-                                        placeholder="图片描述">
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">标签</label>
-                                    <div id="detail-tags" class="flex flex-wrap gap-2"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="p-3 md:p-4 border-t border-gray-100 flex flex-wrap gap-2 justify-end">
-                        <button id="save-detail-btn" class="btn-primary px-3 md:px-4 py-2 rounded-lg text-sm">
-                            <i data-lucide="save" class="w-4 h-4 inline mr-1"></i>保存
-                        </button>
-                        <button id="confirm-btn" class="px-3 md:px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm">
-                            <i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i>确认
-                        </button>
-                        <button id="unconfirm-btn" class="px-3 md:px-4 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 text-sm">
-                            <i data-lucide="alert-circle" class="w-4 h-4 inline mr-1"></i>取消确认
-                        </button>
-                        <button id="reanalyze-btn" class="px-3 md:px-4 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 text-sm">
-                            <i data-lucide="refresh-cw" class="w-4 h-4 inline mr-1"></i>重分析
-                        </button>
-                        <button id="recognize-btn" class="px-3 md:px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm">
-                            <i data-lucide="user-check" class="w-4 h-4 inline mr-1"></i>识别
-                        </button>
-                        <button id="delete-btn" class="px-3 md:px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 text-sm">
-                            <i data-lucide="trash-2" class="w-4 h-4 inline mr-1"></i>删除
-                        </button>
-                    </div>
+                    <button class="close retro-key" type="button" style="padding: 1px 8px; font-size: 11px;">关闭 [X]</button>
+                </div>
+                <div class="retro-well" style="padding: 12px; text-align: center; max-height: 78vh; overflow: auto;">
+                    <img id="zoom-modal-image" src="" alt="原画大图" style="max-width: 100%; max-height: 70vh; object-fit: contain;">
                 </div>
             </div>
         </div>
 
         <!-- 添加别名弹窗 -->
-        <div id="alias-modal" class="fixed inset-0 z-50 hidden">
-            <div class="modal-overlay absolute inset-0 z-40" onclick="document.getElementById('alias-modal').classList.add('hidden')"></div>
-            <div class="modal-content relative z-50 flex items-center justify-center min-h-screen p-2 md:p-4 pointer-events-none">
-                <div class="glass-card rounded-2xl shadow-2xl w-full max-w-md pointer-events-auto">
-                    <div class="flex justify-between items-center p-4 border-b border-gray-100">
-                        <h2 class="text-xl font-bold text-gray-800">添加别名</h2>
-                        <button onclick="document.getElementById('alias-modal').classList.add('hidden')" class="p-2 hover:bg-gray-100 rounded-lg transition">
-                            <i data-lucide="x" class="w-5 h-5"></i>
-                        </button>
+        <div id="alias-modal" class="hidden" style="position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.65); padding: 16px;">
+            <div class="retro-window" style="width: 100%; max-width: 440px;">
+                <div class="retro-titlebar">
+                    <div class="retro-titlebar-left">
+                        <span class="retro-ornament-box" aria-hidden="true"></span>
+                        <span>添加别名</span>
                     </div>
-                    <form id="add-alias-form" class="p-4 space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">类型</label>
-                            <select id="alias-type" class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 outline-none">
-                                <option value="character">角色</option>
-                                <option value="work">作品</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">原名(日文/英文)</label>
-                            <input type="text" id="alias-original" placeholder="例如: 鳴瀬白羽" required
-                                class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">别名(中文/简体)</label>
-                            <input type="text" id="alias-name" placeholder="例如: 鸣濑白羽" required
-                                class="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none">
-                        </div>
-                        <div class="flex gap-3 pt-2">
-                            <button type="submit" class="btn-primary flex-1 py-2 rounded-lg font-medium">
-                                <i data-lucide="plus" class="w-4 h-4 inline mr-1"></i>添加
-                            </button>
-                            <button type="button" id="cancel-alias-btn" class="flex-1 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200">
-                                取消
-                            </button>
-                        </div>
-                    </form>
+                    <button type="button" class="close retro-key" style="padding: 1px 6px; font-size: 11px;" >[X]</button>
                 </div>
+                <form id="add-alias-form" class="retro-well" style="padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+                    <div>
+                        <label for="alias-type" style="display: block; font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700; margin-bottom: 4px;">类型 (TYPE):</label>
+                        <select id="alias-type" class="retro-input" style="width: 100%;">
+                            <option value="character">角色 (CHARACTER)</option>
+                            <option value="work">作品 (WORK)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="alias-original" style="display: block; font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700; margin-bottom: 4px;">原名 (日文/标准名):</label>
+                        <input type="text" id="alias-original" class="retro-input" style="width: 100%;" placeholder="例如: 辻倉朱比華" required>
+                    </div>
+                    <div>
+                        <label for="alias-name" style="display: block; font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700; margin-bottom: 4px;">别名 (中文/简体):</label>
+                        <input type="text" id="alias-name" class="retro-input" style="width: 100%;" placeholder="例如: 辻仓朱比华" required>
+                    </div>
+                    <div style="display: flex; gap: 8px; padding-top: 6px;">
+                        <button type="submit" class="retro-key retro-key-primary" style="flex: 1;">+ 确认添加</button>
+                        <button type="button" id="cancel-alias-btn" class="retro-key" style="flex: 1;">取消</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
 
-    <!-- 自定义确认弹窗 -->
-    <div id="confirm-modal" class="fixed inset-0 z-50 hidden">
-        <div class="absolute inset-0 z-40 bg-black/50 backdrop-blur-sm" id="confirm-overlay"></div>
-        <div class="relative z-50 flex items-center justify-center min-h-screen p-4 pointer-events-none">
-            <div class="glass-card rounded-2xl shadow-2xl w-full max-w-sm p-6 pointer-events-auto">
-                <h3 id="confirm-title" class="text-lg font-bold text-gray-800 mb-2">确认操作</h3>
-                <p id="confirm-message" class="text-gray-600 mb-6">确定要执行此操作吗？</p>
-                <div class="flex gap-3 justify-end">
-                    <button id="confirm-cancel" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
-                        取消
-                    </button>
-                    <button id="confirm-ok" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition">
-                        确定
-                    </button>
+    <!-- 自定义确认弹窗 (Retro System Dialog) -->
+    <div id="confirm-modal" class="hidden" style="position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px;">
+        <div id="confirm-overlay" style="position: absolute; inset: 0; background: rgba(0,0,0,0.65);"></div>
+        <div class="retro-window" style="position: relative; z-index: 10; width: 100%; max-width: 400px;">
+            <div class="retro-titlebar retro-titlebar-pink">
+                <div class="retro-titlebar-left">
+                    <span class="retro-ornament-box" aria-hidden="true"></span>
+                    <span id="confirm-title">确认操作</span>
                 </div>
+            </div>
+            <div class="retro-well" style="padding: 14px; margin-bottom: 8px;">
+                <p id="confirm-message" style="font-size: 14px; font-weight: 700;">确定要执行此操作吗？</p>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                <button id="confirm-cancel" class="retro-key" type="button">取消 (CANCEL)</button>
+                <button id="confirm-ok" class="retro-key retro-key-primary" type="button">确定执行 (OK)</button>
             </div>
         </div>
     </div>
 
-    <!-- Toastify JS -->
+    <!-- Chart.js & Toastify JS -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.js"></script>
     <!-- App JS -->
-    <script src="/web/app.js"></script>
+    <script src="/web/app.js?v=20261107-theme"></script>
 </body>
 </html>

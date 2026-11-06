@@ -108,6 +108,35 @@
   "duplicate_reply_messages": {
     "description": "重复图片回复内容列表。触发回复时随机选择其中一条发送。支持多条消息轮换使用，用逗号分隔。",
     "type": "list",
-    "default": ["这张图已经收录过了~", "图库里已经有这张图了哦", "这张图之前收录过了！"]
+    "default": [
+      "这张图已经收录过了~",
+      "图库里已经有这张图了哦",
+      "这张图之前收录过了！"
+    ]
+  },
+  "jev_filter_enabled": {
+    "description": "启用 jev (Experiential Labs System One) 图片有效/无效判定。开启前需配置 jev_filter_api_key。未配置或接口异常时自动回退原 LLM 筛选。",
+    "type": "bool",
+    "default": false
+  },
+  "jev_filter_api_key": {
+    "description": "Experiential Labs API Key（以 xpl_ 开头）。",
+    "type": "string",
+    "default": ""
+  },
+  "jev_filter_api_base": {
+    "description": "Experiential Labs API Base URL。",
+    "type": "string",
+    "default": "https://api.experientiallabs.ai/v1"
+  },
+  "jev_filter_model": {
+    "description": "jev 判定使用的模型。",
+    "type": "string",
+    "default": "jev-latest"
+  },
+  "jev_filter_threshold": {
+    "description": "有效判定阈值（百分比 1-99）。noul 概率大于等于该值判为有效，默认 50。",
+    "type": "int",
+    "default": 50
   }
 }

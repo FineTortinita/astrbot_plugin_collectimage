@@ -407,18 +407,25 @@ class Database:
         cursor.execute("SELECT COUNT(*) FROM images WHERE timestamp >= ?", (today_start,))
         today_new = cursor.fetchone()[0]
 
-        # 每日新增趋势
+        # 每日新增趋势（单次聚合查询，支持最高 365 天 GitHub 贡献图）
+        now_dt = datetime.now()
+        start_date = (now_dt - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ts = int(start_date.timestamp())
+        cursor.execute(
+            "SELECT date(timestamp, 'unixepoch', 'localtime') AS d, COUNT(*) AS cnt "
+            "FROM images WHERE timestamp >= ? GROUP BY d",
+            (start_ts,),
+        )
+        counts_by_day = {row[0]: row[1] for row in cursor.fetchall() if row[0]}
+
         daily_data = []
         for i in range(days - 1, -1, -1):
-            date = datetime.now() - timedelta(days=i)
-            day_start = int(date.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-            day_end = int(date.replace(hour=23, minute=59, second=59, microsecond=999999).timestamp())
-            cursor.execute("SELECT COUNT(*) FROM images WHERE timestamp >= ? AND timestamp <= ?", (day_start, day_end))
-            count = cursor.fetchone()[0]
+            date = now_dt - timedelta(days=i)
+            date_str = date.strftime("%Y-%m-%d")
             daily_data.append({
-                "date": date.strftime("%Y-%m-%d"),
+                "date": date_str,
                 "label": date.strftime("%m/%d"),
-                "count": count
+                "count": counts_by_day.get(date_str, 0)
             })
 
         return {
