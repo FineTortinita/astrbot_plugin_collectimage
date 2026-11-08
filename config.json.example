@@ -25,6 +25,8 @@
     "图库里已经有这张图了哦",
     "这张图之前收录过了！"
   ],
+  "enable_phash_dedup": true,
+  "phash_threshold": 24,
   "jev_filter_enabled": false,
   "jev_filter_api_key": "",
   "jev_filter_api_base": "https://api.experientiallabs.ai/v1",

@@ -200,6 +200,7 @@ class WebServer:
         self.app.router.add_post("/api/aliases/import/stop", self.handle_import_stop)
 
         self.app.router.add_post("/api/maintenance/cleanup", self.handle_cleanup)
+        self.app.router.add_post("/api/maintenance/dedup", self.handle_dedup)
         self.app.router.add_get("/api/stats", self.handle_get_stats)
         self.app.router.add_get("/api/logs", self.handle_get_logs)
         self.app.router.add_get("/api/health", self.handle_health_check)
@@ -696,6 +697,83 @@ class WebServer:
             logger.error(f"[CollectImage] 清理失败: {e}")
             return self._err(str(e))
 
+    async def handle_dedup(self, request: web.Request) -> web.Response:
+        """感知哈希近重复清理。
+
+        请求体：{"dry_run": true, "threshold": 24}
+        - dry_run=True（默认）：仅统计分组，不删除。
+        - dry_run=False：每组保留一张（优先已确认、文件存在、最早收录），删除其余。
+        """
+        if not await self._check_auth(request):
+            return self._err("Unauthorized", 401)
+
+        try:
+            data = await request.json() if request.can_read_body else {}
+        except Exception:
+            data = {}
+        dry_run = data.get("dry_run", True)
+        if isinstance(dry_run, str):
+            dry_run = dry_run.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            dry_run = bool(dry_run)
+        threshold = self._safe_int(data.get("threshold"), self.plugin._get_phash_threshold())
+        threshold = max(0, min(128, threshold))
+
+        try:
+            groups = self.plugin.db.find_duplicate_groups(threshold=threshold)
+            total_groups = len(groups)
+            removable = sum(len(g) - 1 for g in groups)
+
+            if dry_run:
+                sample = [
+                    {
+                        "size": len(g),
+                        "ids": [img["id"] for img in g[:8]],
+                    }
+                    for g in groups[:20]
+                ]
+                return self._ok({
+                    "dry_run": True,
+                    "threshold": threshold,
+                    "groups": total_groups,
+                    "removable": removable,
+                    "sample": sample,
+                    "message": f"检测到 {total_groups} 组近重复，可清理 {removable} 张（预览，未删除）",
+                })
+
+            def keeper_key(img):
+                file_ok = 1 if self.plugin._resolve_image_file(img.get("file_path")) else 0
+                return (int(img.get("confirmed") or 0), file_ok, -int(img.get("timestamp") or 0))
+
+            deleted = 0
+            file_errors = 0
+            for g in groups:
+                keeper = max(g, key=keeper_key)
+                for img in g:
+                    if img["id"] == keeper["id"]:
+                        continue
+                    try:
+                        resolved = self.plugin._resolve_image_file(img.get("file_path"))
+                        if resolved:
+                            os.remove(resolved)
+                    except OSError as e:
+                        file_errors += 1
+                        logger.warning(f"[CollectImage] 删除重复文件失败: {e}")
+                    self.plugin.db.delete_image(img["id"])
+                    deleted += 1
+            self.plugin.db.invalidate_phash_cache()
+            return self._ok({
+                "dry_run": False,
+                "threshold": threshold,
+                "groups": total_groups,
+                "deleted": deleted,
+                "file_errors": file_errors,
+                "message": f"已清理 {deleted} 张近重复图片（{total_groups} 组）",
+            })
+        except Exception as e:
+            logger.error(f"[CollectImage] 近重复清理失败: {e}")
+            return self._err(str(e))
+
     async def handle_get_stats(self, request: web.Request) -> web.Response:
         try:
             days = self._safe_int(request.query.get("days"), 365)
@@ -778,11 +856,21 @@ class WebServer:
             
             file_hash = hasher.hexdigest()
             
-            # Step 4: 去重 - 检查文件是否已存在
+            # Step 4: 去重 - 先按 MD5 精确比对，再做感知哈希近重复比对
             if self.plugin.db.is_hash_exists(file_hash):
                 os.remove(image_path)
                 image_path = None
                 return self._err("图片已存在（重复上传）")
+
+            phash = self.plugin._calculate_phash(image_path)
+            if phash and self.plugin._phash_dedup_enabled():
+                similar = self.plugin.db.find_similar_phash(
+                    phash, threshold=self.plugin._get_phash_threshold()
+                )
+                if similar:
+                    os.remove(image_path)
+                    image_path = None
+                    return self._err(f"图片与已有图片相似（重复，id={similar['id']}）")
 
             with Image.open(image_path) as image:
                 width, height = image.size
@@ -822,7 +910,7 @@ class WebServer:
                 'ai_detect': ai_detect,
                 'confirmed': confirmed,
                 'created_at': timestamp,
-                'phash': None,
+                'phash': phash,
             }
             
             if not self.plugin.db.add_image(image_data):

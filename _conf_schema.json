@@ -114,6 +114,16 @@
       "这张图之前收录过了！"
     ]
   },
+  "enable_phash_dedup": {
+    "description": "启用感知哈希（phash）近重复去重。开启后，除 MD5 精确去重外，还会拦截重编码/缩放/加水印/加文字的近似重复图片（例如同一作品被反复转发、截图、二次压缩）。关闭则仅做 MD5 精确去重。",
+    "type": "bool",
+    "default": true
+  },
+  "phash_threshold": {
+    "description": "感知哈希相似度阈值（汉明距离，0-128，数值越大越宽松）。基于 16x16 dHash，默认 24 可命中常规近重复图片且能区分「版式相同、内容不同」的图片。推荐值：20-28。调高会增加去重力度但可能误伤相似构图的不同图片。",
+    "type": "int",
+    "default": 24
+  },
   "jev_filter_enabled": {
     "description": "启用 jev (Experiential Labs System One) 图片有效/无效判定。开启前需配置 jev_filter_api_key。未配置或接口异常时自动回退原 LLM 筛选。",
     "type": "bool",

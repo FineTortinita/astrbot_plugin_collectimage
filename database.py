@@ -8,9 +8,13 @@ from astrbot.api import logger
 
 
 class Database:
+    # 感知哈希（phash）编码：8x8 dHash(64bit, 16 hex) + 16x16 dHash(256bit, 64 hex) = 80 hex
+    PHASH_LENGTH = 80
+
     def __init__(self, db_dir: str):
         self.db_path = os.path.join(db_dir, "collectimage.db")
         self._conn: Optional[sqlite3.Connection] = None
+        self._phash_cache: Optional[list] = None  # [(id, d64, d256), ...]
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -56,6 +60,7 @@ class Database:
             cursor.execute("ALTER TABLE images ADD COLUMN phash TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash)")
 
         self._init_alias_db(conn, cursor)
 
@@ -87,6 +92,230 @@ class Database:
         cursor.execute("SELECT 1 FROM images WHERE file_hash = ? LIMIT 1", (file_hash,))
         return cursor.fetchone() is not None
 
+    # ------------------------------------------------------------------
+    # 感知哈希（phash）去重
+    # ------------------------------------------------------------------
+    @classmethod
+    def _split_phash(cls, phash: str):
+        """将 80 位 hex 的 phash 拆成 (d64, d256) 两个整数；格式非法返回 None。"""
+        if not phash or len(phash) != cls.PHASH_LENGTH:
+            return None
+        try:
+            return int(phash[:16], 16), int(phash[16:], 16)
+        except ValueError:
+            return None
+
+    def _load_phash_cache(self) -> list:
+        """把全库有效 phash 载入内存缓存 [(id, d64, d256), ...]。"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, phash FROM images WHERE phash IS NOT NULL AND phash != ''"
+        )
+        cache = []
+        for row in cursor.fetchall():
+            parts = self._split_phash(row[1])
+            if parts is not None:
+                cache.append((row[0], parts[0], parts[1]))
+        self._phash_cache = cache
+        return cache
+
+    def _get_phash_cache(self) -> list:
+        if self._phash_cache is None:
+            return self._load_phash_cache()
+        return self._phash_cache
+
+    def invalidate_phash_cache(self) -> None:
+        self._phash_cache = None
+
+    def _append_phash_cache(self, image_id, phash) -> None:
+        if self._phash_cache is None or not image_id:
+            return
+        parts = self._split_phash(phash)
+        if parts is not None:
+            self._phash_cache.append((image_id, parts[0], parts[1]))
+
+    def find_similar_phash(
+        self,
+        phash: str,
+        threshold: int = 24,
+        d64_threshold: int = 8,
+    ) -> Optional[dict]:
+        """在已收录图片中查找与给定 phash 视觉相近（汉明距离）的图片。
+
+        判定条件（两者同时满足才视为重复）：
+          - 16x16 dHash 汉明距离 <= threshold（默认 24/256）
+          - 8x8  dHash 汉明距离 <= d64_threshold（默认 8/64）
+
+        这样既能命中重编码/缩放/加水印后的近重复图片，又不会把仅版式相同但
+        内容不同的图片（如角色介绍卡片）误判为重复。
+        """
+        parts = self._split_phash(phash)
+        if parts is None:
+            return None
+        d64, d256 = parts
+        best_id = None
+        best_dist = None
+        for img_id, e64, e256 in self._get_phash_cache():
+            if bin(d64 ^ e64).count("1") > d64_threshold:
+                continue
+            dist = bin(d256 ^ e256).count("1")
+            if dist <= threshold and (best_dist is None or dist < best_dist):
+                best_dist = dist
+                best_id = img_id
+        if best_id is None:
+            return None
+        return self.get_image_by_id(best_id)
+
+    def update_phash(self, image_id: int, phash: str) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE images SET phash = ? WHERE id = ?", (phash, image_id))
+            conn.commit()
+            ok = cursor.rowcount > 0
+        except Exception:
+            return False
+        if ok and self._phash_cache is not None:
+            parts = self._split_phash(phash)
+            self._phash_cache = [e for e in self._phash_cache if e[0] != image_id]
+            if parts is not None:
+                self._phash_cache.append((image_id, parts[0], parts[1]))
+        return ok
+
+    def get_images_without_phash(self, limit: int = 100) -> list:
+        """取出尚无有效 phash 的图片（含旧版 16 位 hex 格式，需重算）。"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, file_path FROM images "
+            "WHERE phash IS NULL OR phash = '' OR length(phash) != ? LIMIT ?",
+            (self.PHASH_LENGTH, limit),
+        )
+        return [{"id": row[0], "file_path": row[1]} for row in cursor.fetchall()]
+
+    def count_images_without_valid_phash(self) -> int:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM images "
+            "WHERE phash IS NULL OR phash = '' OR length(phash) != ?",
+            (self.PHASH_LENGTH,),
+        )
+        return cursor.fetchone()[0]
+
+    def find_duplicate_groups(
+        self,
+        threshold: int = 24,
+        d64_threshold: int = 8,
+    ) -> list:
+        """全库两两比对，返回近重复图片分组（每组为图片字典列表，>=2 张）。
+
+        使用并查集聚类。优先用 numpy 向量化计算汉明距离，缺 numpy 时回退纯 Python。
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, phash, file_path, timestamp, confirmed FROM images "
+            "WHERE phash IS NOT NULL AND phash != ''"
+        )
+        rows = []
+        for row in cursor.fetchall():
+            parts = self._split_phash(row[1])
+            if parts is not None:
+                rows.append(
+                    {
+                        "id": row[0],
+                        "d64": parts[0],
+                        "d256": parts[1],
+                        "file_path": row[2],
+                        "timestamp": row[3],
+                        "confirmed": row[4],
+                    }
+                )
+        n = len(rows)
+        if n < 2:
+            return []
+
+        parent = list(range(n))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        handled = False
+        try:
+            import numpy as np
+
+            pc = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
+            d64_arr = np.array([r["d64"] for r in rows], dtype=np.uint64)
+            d256_words = np.array(
+                [[(r["d256"] >> (64 * k)) & 0xFFFFFFFFFFFFFFFF for k in range(4)] for r in rows],
+                dtype=np.uint64,
+            )
+
+            def hamming_block(a_words, b_words):
+                # a_words: (nb,4), b_words: (m,4) -> (nb,m) uint16
+                nb = a_words.shape[0]
+                m = b_words.shape[0]
+                total = np.zeros((nb, m), dtype=np.uint16)
+                for k in range(4):
+                    x = np.bitwise_xor(a_words[:, k, None], b_words[None, :, k])
+                    xb = x.view(np.uint8).reshape(nb, m, 8)
+                    total += pc[xb].sum(axis=2).astype(np.uint16)
+                return total
+
+            d64_block_iter = lambda a, b: (
+                pc[
+                    np.bitwise_xor(a[:, None], b[None, :])
+                    .view(np.uint8)
+                    .reshape(a.shape[0], b.shape[0], 8)
+                ].sum(axis=2).astype(np.uint16)
+            )
+
+            block = 512
+            for j in range(0, n, block):
+                jend = min(j + block, n)
+                bw = d256_words[j:jend]
+                dm256 = hamming_block(bw, d256_words)
+                dm64 = d64_block_iter(d64_arr[j:jend], d64_arr)
+                for ci in range(jend - j):
+                    gj = j + ci
+                    mask = (dm256[ci] <= threshold) & (dm64[ci] <= d64_threshold)
+                    mask[: gj + 1] = False  # 只保留 j>i，避免重复
+                    for other in np.nonzero(mask)[0]:
+                        union(gj, int(other))
+            handled = True
+        except Exception:
+            handled = False
+
+        if not handled:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if (
+                        bin(rows[i]["d64"] ^ rows[j]["d64"]).count("1") <= d64_threshold
+                        and bin(rows[i]["d256"] ^ rows[j]["d256"]).count("1") <= threshold
+                    ):
+                        union(i, j)
+
+        groups_map = {}
+        for i in range(n):
+            groups_map.setdefault(find(i), []).append(i)
+        groups = []
+        for idxs in groups_map.values():
+            if len(idxs) > 1:
+                groups.append([rows[i] for i in idxs])
+        groups.sort(key=len, reverse=True)
+        return groups
+
+
     def add_image(self, image_data: dict) -> bool:
         """从字典添加图片记录"""
         conn = self._get_connection()
@@ -112,6 +341,7 @@ class Database:
                 ),
             )
             conn.commit()
+            self._append_phash_cache(cursor.lastrowid, image_data.get('phash'))
             return True
         except sqlite3.IntegrityError:
             return False
@@ -154,6 +384,7 @@ class Database:
                 ),
             )
             conn.commit()
+            self._append_phash_cache(cursor.lastrowid, phash)
             return True
         except sqlite3.IntegrityError:
             return False

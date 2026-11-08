@@ -76,7 +76,7 @@ class PublicOnlyResolver(AbstractResolver):
         await self._resolver.close()
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.9.0")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.9.1")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -167,6 +167,37 @@ class CollectImagePlugin(Star):
         
         # 初始化别名
         await self._init_aliases_async()
+
+        # 为存量图片补算/重算感知哈希（旧版 16 位 hex 会被识别并重算）
+        await self._backfill_phashes()
+
+    async def _backfill_phashes(self):
+        """为缺失或格式过期的 phash 逐批补算，避免阻塞启动。"""
+        try:
+            pending = self.db.count_images_without_valid_phash()
+            if pending <= 0:
+                return
+            logger.info(f"[CollectImage] 开始补算感知哈希，待处理 {pending} 张")
+            updated = 0
+            attempted = set()
+            while True:
+                batch = self.db.get_images_without_phash(limit=200)
+                batch = [item for item in batch if item["id"] not in attempted]
+                if not batch:
+                    break
+                for item in batch:
+                    attempted.add(item["id"])
+                    resolved = self._resolve_image_file(item.get("file_path"))
+                    if not resolved:
+                        continue
+                    phash = self._calculate_phash(resolved)
+                    if phash:
+                        self.db.update_phash(item["id"], phash)
+                        updated += 1
+                await asyncio.sleep(0.05)
+            logger.info(f"[CollectImage] 感知哈希补算完成，更新 {updated} 张")
+        except Exception as e:
+            logger.error(f"[CollectImage] 补算感知哈希失败: {e}")
     
     async def _image_worker(self):
         """图片处理 worker - 串行处理队列中的图片"""
@@ -230,8 +261,15 @@ class CollectImagePlugin(Star):
                 logger.info("[CollectImage] 图片已存在 (MD5)，跳过")
                 await self._reply_duplicate(event, group_id)
                 return
+
+            phash = self._calculate_phash(local_path)
+            if phash and self._phash_dedup_enabled():
+                similar = self.db.find_similar_phash(phash, threshold=self._get_phash_threshold())
+                if similar:
+                    logger.info(f"[CollectImage] 发现相似图片 (phash)，已有 id={similar['id']}，跳过")
+                    await self._reply_duplicate(event, group_id)
+                    return
             
-            # 先 VLM 分析，无效则不保存
             if image_url:
                 result = await self.analyze_image(image_url, event)
                 
@@ -281,7 +319,7 @@ class CollectImagePlugin(Star):
                     description=result.get("description"),
                     ai_detect=ai_detect,
                     confirmed=confirmed,
-                    phash=None,
+                    phash=phash,
                 )
                 db_inserted = inserted
                 if not inserted:
@@ -454,6 +492,14 @@ class CollectImagePlugin(Star):
                 logger.info("[CollectImage] 转发图片尺寸过小，跳过")
                 return
 
+            phash = self._calculate_phash(tmp_path)
+            if phash and self._phash_dedup_enabled():
+                similar = self.db.find_similar_phash(phash, threshold=self._get_phash_threshold())
+                if similar:
+                    logger.info(f"[CollectImage] 转发图片发现相似图片 (phash)，已有 id={similar['id']}，跳过")
+                    await self._reply_duplicate(event, group_id)
+                    return
+
             result = await self.analyze_image(tmp_path, event)
             if result.get("filter_result") != "有效":
                 logger.info(f"[CollectImage] 转发图片无效，跳过: {result.get('reason')}")
@@ -497,7 +543,7 @@ class CollectImagePlugin(Star):
                 description=result.get("description"),
                 ai_detect=ai_detect,
                 confirmed=confirmed,
-                phash=None,
+                phash=phash,
             )
             db_inserted = inserted
             if not inserted:
@@ -718,6 +764,64 @@ class CollectImagePlugin(Star):
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
+
+    def _resolve_image_file(self, file_path: str) -> Optional[str]:
+        """解析图片实际路径：优先用记录路径，其次在 images 目录内按文件名回退。
+
+        便于数据库在多机/容器间迁移后仍能定位图片（绝对路径前缀可能已失效）。
+        """
+        if file_path and os.path.exists(file_path):
+            return file_path
+        if file_path:
+            candidate = os.path.join(self.images_dir, os.path.basename(file_path))
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    def _phash_dedup_enabled(self) -> bool:
+        value = getattr(self.config, "enable_phash_dedup", True)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
+    def _get_phash_threshold(self) -> int:
+        try:
+            value = int(getattr(self.config, "phash_threshold", 24))
+        except (TypeError, ValueError):
+            value = 24
+        return max(0, min(128, value))
+
+    @staticmethod
+    def _dhash_from_image(gray_image: "PILImage.Image", size: int) -> int:
+        """对灰度图计算 size x size 的 dHash，返回 size*size 位整数。"""
+        small = gray_image.resize((size + 1, size), PILImage.Resampling.LANCZOS)
+        pixels = list(small.getdata())
+        bits = 0
+        for row in range(size):
+            offset = row * (size + 1)
+            for col in range(size):
+                bits = (bits << 1) | (1 if pixels[offset + col] > pixels[offset + col + 1] else 0)
+        return bits
+
+    def _calculate_phash(self, file_path: str) -> str:
+        """计算感知哈希签名（对压缩/缩放/重编码鲁棒）。
+
+        返回 80 位 hex 字符串：前 16 位为 8x8 dHash(64bit)，后 64 位为 16x16
+        dHash(256bit)。8x8 粗筛版式结构，16x16 提供足够分辨率以区分「版式相同、
+        内容不同」的图片（如角色介绍卡片），二者组合可在命中近重复图片的同时
+        抑制误判。失败返回空串。
+        """
+        try:
+            with PILImage.open(file_path) as img:
+                gray = img.convert("L")
+                d64 = self._dhash_from_image(gray, 8)
+                d256 = self._dhash_from_image(gray, 16)
+            return f"{d64:016x}{d256:064x}"
+        except Exception as e:
+            logger.warning(f"[CollectImage] 计算感知哈希失败: {file_path}, {e}")
+            return ""
 
     @staticmethod
     def _make_image_filename(extension: str) -> str:
