@@ -18,7 +18,6 @@ let listRevision = 0;
 let detailRevision = 0;
 let detailDirty = false;
 let confirmBusy = false;
-let noticeTimer;
 let isLoadingMore = false;
 let hasMoreImages = true;
 let infiniteObserver = null;
@@ -88,7 +87,7 @@ function clearInspector() {
     setInspectorEnabled(false);
 }
 function setInspectorEnabled(enabled) {
-    document.querySelectorAll('.inspector-window button,.inspector-window input').forEach(el => el.disabled = !enabled);
+    document.querySelectorAll('#inspector-single button,#inspector-single input,#inspector-single textarea').forEach(el => el.disabled = !enabled);
 }
 async function allowDiscard() {
     return !detailDirty || await showConfirm('尚未保存', '当前角色或描述尚未保存。放弃修改并继续？');
@@ -126,32 +125,54 @@ window.addEventListener('resize', () => {
     }, 250);
 });
 
-// Retro Toast 通知函数
-function showToast(message, type = 'success') {
-    if (typeof Toastify === 'undefined') {
-        const notice = document.getElementById('ui-notice');
-        notice.textContent = message;
-        notice.hidden = false;
-        clearTimeout(noticeTimer);
-        noticeTimer = setTimeout(() => { notice.hidden = true; }, 4500);
-        return;
-    }
-    const baseStyle = { border: '1px solid #dde0e6', boxShadow: '0 6px 24px rgba(22,25,31,.15)', borderRadius: '10px', fontFamily: '"Instrument Sans", "Microsoft YaHei", sans-serif', fontSize: '15px', fontWeight: '400' };
-    const styles = {
-        success: { ...baseStyle, background: '#16191f', color: '#fcfcfd' },
-        error: { ...baseStyle, background: '#fff1f2', color: '#921c30' },
-        warning: { ...baseStyle, background: '#f3f4f6', color: '#16191f' },
-        info: { ...baseStyle, background: '#074ce0', color: '#ffffff' }
-    };
+// 右下角非占用气泡反馈（pointer-events 仅作用于气泡本身，不遮挡页面操作）
+const TOAST_ICONS = { success: '✓', error: '✕', warning: '!', info: 'i' };
+const TOAST_MAX = 5;
 
-    Toastify({
-        text: message,
-        duration: 2800,
-        style: styles[type] || styles.success,
-        close: true,
-        gravity: 'bottom',
-        position: 'right'
-    }).showToast();
+function showToast(message, type = 'success', { persistent = false, duration } = {}) {
+    const stack = document.getElementById('toast-stack');
+    const kind = TOAST_ICONS[type] ? type : 'success';
+    const toast = document.createElement('div');
+    toast.className = `toast-bubble toast-${kind}`;
+    toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = TOAST_ICONS[kind];
+    const text = document.createElement('span');
+    text.className = 'toast-text';
+    text.textContent = String(message ?? '');
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', '关闭提示');
+    close.textContent = '×';
+    toast.append(icon, text, close);
+
+    let timer = null;
+    const ttl = duration ?? (kind === 'error' ? 5000 : 2800);
+    const dismiss = () => {
+        clearTimeout(timer);
+        if (!toast.isConnected || toast.classList.contains('toast-leaving')) return;
+        toast.classList.add('toast-leaving');
+        setTimeout(() => toast.remove(), 220);
+    };
+    const arm = () => { if (!persistent) { clearTimeout(timer); timer = setTimeout(dismiss, ttl); } };
+    close.addEventListener('click', dismiss);
+    toast.addEventListener('mouseenter', () => clearTimeout(timer));
+    toast.addEventListener('mouseleave', arm);
+
+    if (stack) {
+        stack.appendChild(toast);
+        const live = stack.querySelectorAll('.toast-bubble:not(.toast-leaving)');
+        for (let i = 0; i < live.length - TOAST_MAX; i++) live[i].remove();
+        arm();
+    }
+    return {
+        update(msg) { text.textContent = String(msg ?? ''); },
+        close: dismiss,
+    };
 }
 
 // 自定义确认弹窗
@@ -468,17 +489,7 @@ function bindEventListeners() {
         });
     }
 
-    // 放大窗按钮与关闭
-    const openZoomBtn = document.getElementById('open-modal-zoom-btn');
-    if (openZoomBtn && detailModal) {
-        openZoomBtn.addEventListener('click', () => {
-            const src = document.getElementById('detail-image')?.src;
-            if (!src) return;
-            const zoomImg = document.getElementById('zoom-modal-image');
-            if (zoomImg) zoomImg.src = src;
-            detailModal.classList.remove('hidden');
-        });
-    }
+    bindBatchControls();
 
     const detailCloseBtn = document.querySelector('#detail-modal .close');
     if (detailCloseBtn && detailModal) {
@@ -537,12 +548,18 @@ function bindEventListeners() {
 
     // 空格键快捷盖章确认归档
     window.addEventListener('keydown', async (e) => {
+        if (e.key === 'Escape' && batchMode && !e.defaultPrevented && !e.target.closest?.('[role="dialog"]') && !document.querySelector('[role="dialog"]:not(.hidden)')) {
+            e.preventDefault();
+            setBatchMode(false);
+            return;
+        }
         const tag = document.activeElement?.tagName;
         if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(tag)) return;
         if (mainPage?.classList.contains('hidden') || e.ctrlKey || e.altKey || e.metaKey) return;
         if (e.repeat || document.querySelector('[role="dialog"]:not(.hidden)')) return;
         const imagesTab = document.getElementById('tab-images');
         if (!imagesTab || imagesTab.classList.contains('hidden')) return;
+        if (batchMode) return;
         if (e.code === 'Space' && currentImageId) {
             e.preventDefault();
             await setConfirmStatus(currentImageId, true, true);
@@ -586,7 +603,8 @@ function bindEventListeners() {
     if (recognizeBtn) {
         recognizeBtn.addEventListener('click', async () => {
             if (!currentImageId) return;
-            if (!await showConfirm('识别角色', '确定要识别这张图片的角色吗？')) return;
+            if (!await allowDiscard()) return;
+            if (!await showConfirm('识别角色', '使用 AnimeTrace 识别角色（未命中时回退 VLM），结果将覆盖当前角色。继续？')) return;
 
             recognizeBtn.disabled = true;
             recognizeBtn.textContent = '识别中...';
@@ -598,9 +616,13 @@ function bindEventListeners() {
                 const data = await response.json();
 
                 if (data.success) {
-                    showToast('角色识别完成', 'success');
-                    await openDetail(currentImageId);
-                    loadImages();
+                    if (data.source === 'none') {
+                        showToast('未识别到角色，已保留原有数据', 'warning');
+                    } else {
+                        showToast(`角色识别完成（${data.source === 'vlm' ? 'VLM 回退' : 'AnimeTrace'}）`, 'success');
+                        updateCardCharacter(currentImageId, data.character);
+                        await openDetail(currentImageId);
+                    }
                 } else {
                     showToast('角色识别失败: ' + data.error, 'error');
                 }
@@ -1290,14 +1312,15 @@ async function searchImagesWithAlias(keyword) {
 }
 
 let selectedImages = new Set();
-let imageIdMap = new Map();
+let batchMode = false;
+let batchBusy = false;
 
 // 渲染图片列表 (支持无限滚动追加 & 毛玻璃环境色晕染)
 function renderImages(images, append = false) {
     if (!append) {
         imageGrid.innerHTML = '';
-        selectedImages.clear();
-        imageIdMap.clear();
+        const loadedIds = new Set(images.map(x => x.id));
+        selectedImages.forEach(id => { if (!loadedIds.has(id)) selectedImages.delete(id); });
         updateBatchOperationsUI();
     }
 
@@ -1311,7 +1334,6 @@ function renderImages(images, append = false) {
     }
 
     images.forEach(img => {
-        imageIdMap.set(img.file_name, img.id);
         const thumbUrl = `${API_BASE}/images/${encodeURIComponent(String(img.file_name || ''))}?size=thumb`;
         const card = document.createElement('div');
         card.className = `image-card ${img.id === currentImageId ? 'active-cel' : ''}`;
@@ -1320,7 +1342,9 @@ function renderImages(images, append = false) {
         card.tabIndex = 0;
         card.setAttribute('aria-label', `查看图片 ${img.id} 的详情`);
         card.addEventListener('keydown', e => {
-            if (e.target === card && e.key === 'Enter') { e.preventDefault(); openDetail(img.id); }
+            if (e.target !== card || e.key !== 'Enter') return;
+            e.preventDefault();
+            batchMode ? toggleBatchSelection(img.id) : openDetail(img.id);
         });
 
         let tagsText = '';
@@ -1329,37 +1353,18 @@ function renderImages(images, append = false) {
             tagsText = allTags.slice(0, 3).join(' · ');
         }
 
-        let characterText = '未知角色';
-        if (img.character) {
-            try {
-                const chars = typeof img.character === 'string' ? JSON.parse(img.character) : img.character;
-                if (Array.isArray(chars) && chars.length > 0) {
-                    characterText = chars.map(c => c.work ? `${c.name} [${c.work}]` : c.name).join(', ');
-                } else {
-                    characterText = String(img.character);
-                }
-            } catch {
-                characterText = String(img.character);
-            }
-        }
+        const characterText = formatCharacterText(img.character);
 
-        // 顶部复古标题条: 勾选框 + CUT编号 + 群号
         const titleBar = document.createElement('div');
         titleBar.className = 'cel-window-bar';
-
-        const leftCluster = document.createElement('label');
-        leftCluster.style.cssText = 'display:inline-flex;align-items:center;gap:5px;cursor:pointer;';
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'image-checkbox';
-        checkbox.dataset.filename = String(img.file_name || '');
         const cutSpan = document.createElement('span');
         cutSpan.textContent = `#${img.id}`;
-        leftCluster.append(checkbox, cutSpan);
-
-        const grpSpan = document.createElement('span');
-        grpSpan.textContent = `GRP:${img.group_id || '--'}`;
-        titleBar.append(leftCluster, grpSpan);
+        const selMark = document.createElement('span');
+        selMark.className = 'batch-select-mark';
+        selMark.setAttribute('aria-hidden', 'true');
+        selMark.textContent = '✓';
+        titleBar.append(cutSpan, selMark);
+        if (selectedImages.has(img.id)) card.classList.add('batch-selected');
 
         // 图片毛玻璃画框井（底层高斯模糊环境色散射 + 上层高清缩略图）
         const imageWrap = document.createElement('div');
@@ -1395,7 +1400,9 @@ function renderImages(images, append = false) {
         badge.textContent = img.confirmed ? '✓ 已确认' : '待校对';
         badge.addEventListener('click', (e) => {
             e.stopPropagation();
-            setConfirmStatus(img.id, !img.confirmed, false);
+            if (batchMode) { toggleBatchSelection(img.id); return; }
+            const item = currentLoadedImages.find(x => x.id === img.id) || img;
+            setConfirmStatus(img.id, !item.confirmed, false);
         });
         charLine.append(character, badge);
 
@@ -1409,18 +1416,17 @@ function renderImages(images, append = false) {
         metaWell.append(charLine, tagLine);
         card.append(titleBar, imageWrap, metaWell);
 
-        checkbox.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (checkbox.checked) {
-                selectedImages.add(img.file_name);
-            } else {
-                selectedImages.delete(img.file_name);
-            }
-            updateBatchOperationsUI();
+        card.addEventListener('dblclick', (e) => {
+            if (batchMode || e.target.closest('button')) return;
+            openZoom(img.file_name);
         });
 
         card.addEventListener('click', (e) => {
-            if (e.target.closest('label,button,input')) return;
+            if (e.target.closest('button,input')) return;
+            if (batchMode) {
+                toggleBatchSelection(img.id);
+                return;
+            }
             document.querySelectorAll('.image-card').forEach(c => {
                 c.classList.toggle('active-cel', Number(c.dataset.id) === img.id);
             });
@@ -1431,119 +1437,217 @@ function renderImages(images, append = false) {
 
         imageGrid.appendChild(card);
     });
+    if (batchMode && append) updateBatchOperationsUI();
 }
 
-// 更新批量操作UI
+function formatCharacterText(raw) {
+    if (!raw) return '未知角色';
+    try {
+        const chars = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (Array.isArray(chars)) {
+            return chars.length ? chars.map(c => c.work ? `${c.name} [${c.work}]` : c.name).join(', ') : '未知角色';
+        }
+    } catch (_) {}
+    return String(raw);
+}
+
+function updateCardCharacter(id, character) {
+    const item = currentLoadedImages.find(x => x.id === id);
+    if (item) item.character = character;
+    const el = imageGrid.querySelector(`.image-card[data-id="${id}"] .cel-char-line > div`);
+    if (el) {
+        el.textContent = formatCharacterText(character);
+        el.title = el.textContent;
+    }
+}
+
+function openZoom(fileName) {
+    const zoomImg = document.getElementById('zoom-modal-image');
+    if (!zoomImg || !detailModal || !fileName) return;
+    zoomImg.src = `${API_BASE}/images/${encodeURIComponent(String(fileName))}`;
+    detailModal.classList.remove('hidden');
+    detailModal.querySelector('.close')?.focus();
+}
+
+async function setBatchMode(on) {
+    if (on && !await allowDiscard()) return;
+    batchMode = on;
+    if (on) detailDirty = false;
+    selectedImages.clear();
+    imageGrid.querySelectorAll('.image-card.batch-selected').forEach(c => c.classList.remove('batch-selected'));
+    document.getElementById('tab-images')?.classList.toggle('batch-mode', on);
+    const btn = document.getElementById('batch-mode-btn');
+    if (btn) {
+        btn.textContent = on ? '✕ 退出批量选择' : '☐ 批量选择';
+        btn.setAttribute('aria-pressed', String(on));
+        btn.classList.toggle('retro-key-primary', on);
+    }
+    const hint = document.getElementById('grid-status-hint');
+    if (hint) hint.dataset.batch = on ? '1' : '';
+    updateBatchOperationsUI();
+    if (!on && currentImageId) openDetail(currentImageId);
+}
+
+function toggleBatchSelection(id) {
+    if (selectedImages.has(id)) selectedImages.delete(id); else selectedImages.add(id);
+    imageGrid.querySelector(`.image-card[data-id="${id}"]`)?.classList.toggle('batch-selected', selectedImages.has(id));
+    updateBatchOperationsUI();
+}
+
 function updateBatchOperationsUI() {
     const batchOps = document.getElementById('batch-operations');
-    const selectedCount = document.getElementById('selected-count');
-    const selectAllCheckbox = document.getElementById('select-all');
+    const panel = document.getElementById('batch-panel');
+    const single = document.getElementById('inspector-single');
+    const n = selectedImages.size;
 
-    if (selectedImages.size > 0) {
-        batchOps?.classList.remove('hidden');
-        if (selectedCount) selectedCount.textContent = `已选择 ${selectedImages.size} 张图片`;
-    } else {
-        batchOps?.classList.add('hidden');
+    batchOps?.classList.toggle('hidden', !batchMode);
+    panel?.classList.toggle('hidden', !batchMode);
+    single?.classList.toggle('hidden', batchMode);
+    if (!batchMode) return;
+
+    const loadedCount = imageGrid.querySelectorAll('.image-card').length;
+    const countText = `已选择 ${n} 张图片`;
+    const selectedCount = document.getElementById('selected-count');
+    if (selectedCount) selectedCount.textContent = countText;
+    const selectAllBtn = document.getElementById('select-all-btn');
+    if (selectAllBtn) selectAllBtn.textContent = loadedCount > 0 && n >= loadedCount ? '取消全选' : '全选已加载';
+
+    const title = document.getElementById('batch-panel-count');
+    if (title) title.textContent = n ? `${n} 张` : '未选择';
+    const empty = document.getElementById('batch-panel-empty');
+    const body = document.getElementById('batch-panel-body');
+    empty?.classList.toggle('hidden', n > 0);
+    body?.classList.toggle('hidden', n === 0);
+
+    document.querySelectorAll('[data-batch-action]').forEach(b => {
+        const label = b.dataset.label || b.textContent;
+        b.dataset.label = label;
+        b.textContent = n > 1 ? `${label} ×${n}` : label;
+        b.disabled = n === 0 || batchBusy;
+    });
+
+    const strip = document.getElementById('batch-thumb-strip');
+    if (strip) {
+        strip.replaceChildren();
+        const ids = Array.from(selectedImages);
+        ids.slice(0, 24).forEach(id => {
+            const item = currentLoadedImages.find(x => x.id === id);
+            if (!item) return;
+            const cell = document.createElement('button');
+            cell.type = 'button';
+            cell.className = 'batch-thumb';
+            cell.title = `#${id} · 点击移出选择`;
+            const im = document.createElement('img');
+            im.src = `${API_BASE}/images/${encodeURIComponent(String(item.file_name || ''))}?size=thumb`;
+            im.alt = `#${id}`;
+            im.loading = 'lazy';
+            cell.appendChild(im);
+            cell.addEventListener('click', () => toggleBatchSelection(id));
+            strip.appendChild(cell);
+        });
+        if (ids.length > 24) {
+            const more = document.createElement('span');
+            more.className = 'batch-thumb batch-thumb-more';
+            more.textContent = `+${ids.length - 24}`;
+            strip.appendChild(more);
+        }
     }
 
-    if (selectAllCheckbox) {
-        const allCheckboxes = document.querySelectorAll('.image-checkbox');
-        selectAllCheckbox.checked = allCheckboxes.length > 0 && selectedImages.size === allCheckboxes.length;
+    const stats = document.getElementById('batch-panel-stats');
+    if (stats) {
+        const items = currentLoadedImages.filter(x => selectedImages.has(x.id));
+        const conf = items.filter(x => x.confirmed).length;
+        stats.textContent = `已确认 ${conf} · 待校对 ${items.length - conf}`;
     }
 }
 
-// 全选按钮
-document.getElementById('select-all')?.addEventListener('change', (e) => {
-    const checkboxes = document.querySelectorAll('.image-checkbox');
-    checkboxes.forEach(cb => {
-        cb.checked = e.target.checked;
-        const filename = cb.dataset.filename;
-        if (e.target.checked) {
-            selectedImages.add(filename);
-        } else {
-            selectedImages.delete(filename);
-        }
-    });
+async function runBatchPerImage(ids, label, endpoint) {
+    const progress = showToast(`${label}中 0 / ${ids.length}`, 'info', { persistent: true });
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+        try {
+            const res = await fetch(`${API_BASE}/api/images/${id}/${endpoint}`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok && data.success) ok++; else fail++;
+        } catch (_) { fail++; }
+        progress.update(`${label}中 ${ok + fail} / ${ids.length}`);
+    }
+    progress.close();
+    showToast(fail ? `${label}完成：${ok} 成功，${fail} 失败` : `${label}完成：共 ${ok} 张`, fail ? 'warning' : 'success');
+}
+
+async function handleBatchAction(action) {
+    const ids = Array.from(selectedImages);
+    if (!ids.length || batchBusy) return;
+    const n = ids.length;
+    const confirmText = {
+        confirm: ['批量确认', `确定要确认选中的 ${n} 张图片吗？`],
+        unconfirm: ['取消确认', `确定要取消确认选中的 ${n} 张图片吗？`],
+        recognize: ['批量识别角色', `将逐张识别 ${n} 张图片的角色（AnimeTrace，失败回退 VLM），可能需要较长时间。继续？`],
+        reanalyze: ['批量 VLM 重分析', `将逐张重新分析 ${n} 张图片的标签、角色与描述，可能需要较长时间。继续？`],
+        delete: ['批量删除', `确定要删除选中的 ${n} 张图片吗？此操作不可恢复！`],
+    }[action];
+    if (!confirmText || !await showConfirm(...confirmText)) return;
+
+    batchBusy = true;
     updateBatchOperationsUI();
-});
-
-// 批量确认
-document.getElementById('batch-confirm-btn')?.addEventListener('click', async () => {
-    if (selectedImages.size === 0) return;
-    if (!await showConfirm('批量确认', `确定要确认选中的 ${selectedImages.size} 张图片吗？`)) return;
-
-    const imageIds = Array.from(selectedImages).map(fn => imageIdMap.get(fn)).filter(id => id);
     try {
-        const response = await fetch(`${API_BASE}/api/images/batch/confirm`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_ids: imageIds, confirmed: true })
-        });
-        const data = await response.json();
-        if (data.success) {
+        if (action === 'confirm' || action === 'unconfirm') {
+            const res = await fetch(`${API_BASE}/api/images/batch/confirm`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_ids: ids, confirmed: action === 'confirm' })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
             showToast(data.message, 'success');
-            selectedImages.clear();
-            loadImages();
-            refreshMonitorFacts();
-        } else {
-            showToast('操作失败: ' + data.error, 'error');
-        }
-    } catch (e) {
-        showToast('操作失败: ' + e.message, 'error');
-    }
-});
-
-// 批量取消确认
-document.getElementById('batch-unconfirm-btn')?.addEventListener('click', async () => {
-    if (selectedImages.size === 0) return;
-    if (!await showConfirm('取消确认', `确定要取消确认选中的 ${selectedImages.size} 张图片吗？`)) return;
-
-    const imageIds = Array.from(selectedImages).map(fn => imageIdMap.get(fn)).filter(id => id);
-    try {
-        const response = await fetch(`${API_BASE}/api/images/batch/confirm`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_ids: imageIds, confirmed: false })
-        });
-        const data = await response.json();
-        if (data.success) {
+        } else if (action === 'delete') {
+            const res = await fetch(`${API_BASE}/api/images/batch`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_ids: ids })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
             showToast(data.message, 'success');
-            selectedImages.clear();
-            loadImages();
-            refreshMonitorFacts();
-        } else {
-            showToast('操作失败: ' + data.error, 'error');
+            if (ids.includes(currentImageId)) currentImageId = null;
+        } else if (action === 'recognize') {
+            await runBatchPerImage(ids, '识别角色', 'recognize_character');
+        } else if (action === 'reanalyze') {
+            await runBatchPerImage(ids, 'VLM 重分析', 'reanalyze');
         }
+        selectedImages.clear();
+        await loadImages();
+        refreshMonitorFacts();
     } catch (e) {
-        showToast('操作失败: ' + e.message, 'error');
+        showToast('操作失败: ' + (e.message || e), 'error');
+    } finally {
+        batchBusy = false;
+        updateBatchOperationsUI();
     }
-});
+}
 
-// 批量删除
-document.getElementById('batch-delete-btn')?.addEventListener('click', async () => {
-    if (selectedImages.size === 0) return;
-    if (!await showConfirm('批量删除', `确定要删除选中的 ${selectedImages.size} 张图片吗？此操作不可恢复！`)) return;
-
-    const imageIds = Array.from(selectedImages).map(fn => imageIdMap.get(fn)).filter(id => id);
-    try {
-        const response = await fetch(`${API_BASE}/api/images/batch`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_ids: imageIds })
+function bindBatchControls() {
+    document.getElementById('batch-mode-btn')?.addEventListener('click', () => setBatchMode(!batchMode));
+    document.getElementById('select-all-btn')?.addEventListener('click', () => {
+        const cards = imageGrid.querySelectorAll('.image-card');
+        const selectAll = selectedImages.size < cards.length;
+        cards.forEach(c => {
+            const id = Number(c.dataset.id);
+            if (selectAll) selectedImages.add(id); else selectedImages.delete(id);
+            c.classList.toggle('batch-selected', selectAll);
         });
-        const data = await response.json();
-        if (data.success) {
-            showToast(data.message, 'success');
-            selectedImages.clear();
-            loadImages();
-            refreshMonitorFacts();
-        } else {
-            showToast('删除失败: ' + data.error, 'error');
-        }
-    } catch (e) {
-        showToast('删除失败: ' + e.message, 'error');
-    }
-});
+        updateBatchOperationsUI();
+    });
+    document.getElementById('batch-clear-btn')?.addEventListener('click', () => {
+        selectedImages.clear();
+        imageGrid.querySelectorAll('.image-card.batch-selected').forEach(c => c.classList.remove('batch-selected'));
+        updateBatchOperationsUI();
+    });
+    document.querySelectorAll('[data-batch-action]').forEach(b => {
+        b.addEventListener('click', () => handleBatchAction(b.dataset.batchAction));
+    });
+}
 
 // 更新分页信息
 function updatePagination() {

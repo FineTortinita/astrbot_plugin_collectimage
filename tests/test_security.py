@@ -117,7 +117,10 @@ class SecurityTests(unittest.TestCase):
         })
         server = object.__new__(WebServer)
         server.plugin = type("Plugin", (), {"config": config})()
-        server._sessions = {"old-session": 1.0}
+        server._server_secret = b"x" * 32
+        server._revoked_tokens = {}
+        old_token = server._issue_token()
+        self.assertIsNotNone(server._verify_token(old_token))
 
         response = asyncio.run(server.handle_update_config(JsonRequest({
             "webui_password": "new-password-123",
@@ -128,7 +131,20 @@ class SecurityTests(unittest.TestCase):
         self.assertTrue(body["success"])
         self.assertEqual(config.save_count, 1)
         self.assertEqual(config["max_api_images"], 25)
-        self.assertEqual(server._sessions, {})
+        self.assertIsNone(server._verify_token(old_token))
+
+    def test_signed_token_rejects_tampering_and_expiry(self):
+        server = object.__new__(WebServer)
+        server.plugin = type("Plugin", (), {"config": {"webui_password": "existing-password"}})()
+        server._server_secret = b"y" * 32
+        server._revoked_tokens = {}
+        token = server._issue_token()
+        self.assertIsNotNone(server._verify_token(token))
+        expires, nonce, sig = token.split(".")
+        self.assertIsNone(server._verify_token(f"{int(expires) + 99}.{nonce}.{sig}"))
+        self.assertIsNone(server._verify_token("garbage"))
+        server._revoked_tokens[nonce] = int(expires)
+        self.assertIsNone(server._verify_token(token))
 
     def test_negative_pagination_values_are_rejected_by_clamp(self):
         limit, offset = WebServer._bounded_pagination(-1, -100, 50)

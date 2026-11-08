@@ -4,12 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>图片收集管理器</title>
-    <!-- Toastify CSS -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.css">
-    <link rel="stylesheet" href="/web/software.css?v=20261107-theme">
+    <link rel="stylesheet" href="/web/software.css?v=20261108-batch">
 </head>
 <body>
-    <div id="ui-notice" role="status" aria-live="polite" hidden></div>
+    <div id="toast-stack" aria-live="polite"></div>
     <div id="app">
         <!-- 登录页 (Retro Password Dialog Window) -->
         <div id="login-page" class="min-h-screen flex items-center justify-center p-4" style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;">
@@ -160,6 +158,7 @@
                                         <button id="search-btn" class="retro-key retro-key-yellow" type="button">
                                             <span class="retro-ticker-arrow" aria-hidden="true">&gt;</span> 搜索
                                         </button>
+                                        <button id="batch-mode-btn" class="retro-key" type="button" aria-pressed="false" title="进入后单击卡片即可选中，Esc 退出">☐ 批量选择</button>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                                         <button type="button" class="retro-key quick-query-btn" data-q="辻倉朱比華" style="font-size: 11px; padding: 4px 8px;">辻倉朱比華⇄anemoi</button>
@@ -169,18 +168,12 @@
                                 </div>
 
                                 <!-- 批量操作栏 -->
-                                <div id="batch-operations" class="toolbar-well hidden" style="background-color: var(--dp-color-highlight);">
-                                    <div style="display: flex; align-items: center; gap: 12px;">
-                                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; font-size: 13px;">
-                                            <input type="checkbox" id="select-all" style="width: 16px; height: 16px;">
-                                            <span>全选本页</span>
-                                        </label>
-                                        <span id="selected-count" style="font-family: var(--dp-typography-mono); font-size: 12px; font-weight: 700;">已选择 0 张图片</span>
-                                    </div>
-                                    <div style="display: flex; gap: 6px;">
-                                        <button id="batch-confirm-btn" class="retro-key retro-key-teal" type="button">✓ 批量确认归档</button>
-                                        <button id="batch-unconfirm-btn" class="retro-key retro-key-yellow" type="button">! 批量取消确认</button>
-                                        <button id="batch-delete-btn" class="retro-key retro-key-pink" type="button">✕ 批量删除</button>
+                                <div id="batch-operations" class="toolbar-well hidden">
+                                    <span id="selected-count" style="font-weight: 600; font-size: 14px;">已选择 0 张图片</span>
+                                    <span style="font-size: 13px; color: var(--dp-color-ink-secondary);">单击卡片选中 / 取消，Esc 退出</span>
+                                    <div style="display: flex; gap: 6px; margin-left: auto;">
+                                        <button id="select-all-btn" class="retro-key" type="button">全选已加载</button>
+                                        <button id="batch-clear-btn" class="retro-key" type="button">清空选择</button>
                                     </div>
                                 </div>
 
@@ -215,9 +208,30 @@
                                         <span class="retro-ornament-box" aria-hidden="true"></span>
                                         <span>图片详情</span>
                                     </div>
-                                    <button type="button" id="open-modal-zoom-btn" class="retro-key" style="padding: 1px 6px; font-size: 11px;">查看大图</button>
+                                    <span style="font-family: var(--dp-typography-mono); font-size: 11px;">双击卡片查看原图</span>
                                 </div>
 
+                                <!-- 批量模式面板：随选中数量扩展 -->
+                                <div id="batch-panel" class="hidden">
+                                    <div class="batch-panel-head">
+                                        <span>批量操作</span>
+                                        <strong id="batch-panel-count">未选择</strong>
+                                    </div>
+                                    <div id="batch-panel-empty" class="batch-panel-empty">在左侧单击图片卡片进行选择</div>
+                                    <div id="batch-panel-body" class="hidden">
+                                        <div id="batch-panel-stats" class="batch-panel-stats"></div>
+                                        <div id="batch-thumb-strip" class="batch-thumb-strip"></div>
+                                        <div class="batch-panel-actions">
+                                            <button data-batch-action="confirm" class="retro-key retro-key-teal" type="button">确认归档</button>
+                                            <button data-batch-action="unconfirm" class="retro-key" type="button">取消确认</button>
+                                            <button data-batch-action="recognize" class="retro-key" type="button">识别角色</button>
+                                            <button data-batch-action="reanalyze" class="retro-key" type="button">↻ VLM 重分析</button>
+                                            <button data-batch-action="delete" class="retro-key batch-danger" type="button">删除图片</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div id="inspector-single">
                                 <!-- 主操作：盖章确认归档 + 保存 + 重分析 -->
                                 <div class="inspector-actions" style="display: flex; flex-direction: column; gap: 6px;">
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
@@ -305,7 +319,7 @@
                                     </div>
                                     <div id="detail-tags" class="retro-well" style="padding: 6px; min-height: 54px; max-height: 110px; overflow-y: auto;"></div>
                                 </div>
-
+                                </div>
                             </aside>
                         </div>
                     </div>
@@ -487,7 +501,7 @@
                     </div>
                     <div>
                         <span class="folder-heading">快捷操作</span>
-                        <div>Click Card: 检视 | Space: 盖章确认</div>
+                        <div>单击: 检视 | 双击: 原图 | Space: 确认</div>
                     </div>
                     <div>
                         <span class="folder-heading">存储设置</span>
@@ -596,10 +610,7 @@
         </div>
     </div>
 
-    <!-- Chart.js & Toastify JS -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.js"></script>
-    <!-- App JS -->
-    <script src="/web/app.js?v=20261107-theme"></script>
+    <script src="/web/app.js?v=20261108-batch"></script>
 </body>
 </html>

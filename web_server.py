@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import hashlib
+import hmac
 import io
 import json
 import logging
@@ -90,7 +91,8 @@ def _generate_thumbnail_cached(image_path: str, thumbnail_size: int = DEFAULT_TH
 
 class WebServer:
     CLIENT_MAX_SIZE = 50 * 1024 * 1024
-    SESSION_TIMEOUT = 3600
+    SESSION_TIMEOUT = 30 * 24 * 3600
+    SESSION_RENEW_THRESHOLD = 15 * 24 * 3600
 
     def __init__(self, plugin: Any, host: str = "0.0.0.0", port: int = 9192):
         self.plugin = plugin
@@ -109,7 +111,8 @@ class WebServer:
         logger.info(f"[CollectImage] WebUI 图片目录: {self.images_dir}")
 
         self._cookie_name = "collectimage_webui_session"
-        self._sessions: dict[str, float] = {}
+        self._server_secret = self._load_server_secret()
+        self._revoked_tokens: dict[str, float] = {}
         
         # 登录限制
         self._login_attempts: dict[str, list[float]] = {}  # IP -> [timestamp1, timestamp2, ...]
@@ -236,16 +239,64 @@ class WebServer:
     def _err(msg: str, status: int = 500) -> web.Response:
         return web.json_response({"success": False, "error": msg}, status=status)
 
+    @staticmethod
+    def _load_server_secret() -> bytes:
+        """持久化签名密钥，插件重启后已签发的 Cookie 仍然有效。"""
+        key_file = Path(StarTools.get_data_dir("astrbot_plugin_collectimage")) / "webui_secret.key"
+        try:
+            secret = key_file.read_bytes()
+            if len(secret) >= 32:
+                return secret
+        except FileNotFoundError:
+            pass
+        secret = secrets.token_bytes(32)
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(key_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(secret)
+        return secret
+
+    def _signing_key(self) -> bytes:
+        # 绑定当前密码：修改密码后旧 Cookie 自动失效
+        password = str(self.plugin.config.get("webui_password", "") or "")
+        return hmac.new(self._server_secret, password.encode("utf-8"), hashlib.sha256).digest()
+
+    def _issue_token(self) -> str:
+        payload = f"{int(time.time() + self.SESSION_TIMEOUT)}.{secrets.token_hex(12)}"
+        sig = hmac.new(self._signing_key(), payload.encode(), hashlib.sha256).hexdigest()
+        return f"{payload}.{sig}"
+
+    def _verify_token(self, token: Optional[str]) -> Optional[int]:
+        """校验通过返回过期时间戳，否则返回 None。"""
+        if not token:
+            return None
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        expires, nonce, sig = parts
+        expected = hmac.new(self._signing_key(), f"{expires}.{nonce}".encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        try:
+            expires_at = int(expires)
+        except ValueError:
+            return None
+        if expires_at < time.time() or nonce in self._revoked_tokens:
+            return None
+        return expires_at
+
+    def _set_session_cookie(self, response: web.StreamResponse, token: str) -> None:
+        response.set_cookie(
+            self._cookie_name,
+            token,
+            path="/",
+            httponly=True,
+            max_age=self.SESSION_TIMEOUT,
+            samesite="Strict",
+        )
+
     async def _check_auth(self, request: web.Request) -> bool:
-        session = request.cookies.get(self._cookie_name)
-        if not session:
-            return False
-        expire_time = self._sessions.get(session, 0)
-        if expire_time < time.time():
-            if session in self._sessions:
-                del self._sessions[session]
-            return False
-        return True
+        return self._verify_token(request.cookies.get(self._cookie_name)) is not None
 
     def _get_client_ip(self, request: web.Request) -> str:
         # 优先使用直接连接的IP，避免信任伪造的X-Forwarded-For
@@ -323,9 +374,14 @@ class WebServer:
             return await handler(request)
         if request.path.startswith("/web/") or request.path == "/" or request.path == "/index.html" or request.path == "/favicon.ico":
             return await handler(request)
-        if not await self._check_auth(request):
+        expires_at = self._verify_token(request.cookies.get(self._cookie_name))
+        if expires_at is None:
             return web.json_response({"success": False, "error": "未登录", "code": 401}, status=401)
-        return await handler(request)
+        response = await handler(request)
+        # 滑动续期：活跃使用时剩余有效期不足一半就换发新 Cookie
+        if expires_at - time.time() < self.SESSION_RENEW_THRESHOLD and isinstance(response, web.StreamResponse) and not response.prepared:
+            self._set_session_cookie(response, self._issue_token())
+        return response
 
     @web.middleware
     async def _error_middleware(self, request: web.Request, handler):
@@ -358,17 +414,8 @@ class WebServer:
                 if client_ip in self._login_attempts:
                     del self._login_attempts[client_ip]
                 
-                session = secrets.token_hex(16)
-                self._sessions[session] = time.time() + self.SESSION_TIMEOUT
                 response = self._ok({"message": "登录成功"})
-                response.set_cookie(
-                    self._cookie_name, 
-                    session, 
-                    path="/",
-                    httponly=True,
-                    max_age=self.SESSION_TIMEOUT,
-                    samesite="Strict"
-                )
+                self._set_session_cookie(response, self._issue_token())
                 return response
             
             self._record_failed_attempt(client_ip)
@@ -382,9 +429,12 @@ class WebServer:
         return self._ok({"logged_in": is_logged_in})
 
     async def handle_logout(self, request: web.Request) -> web.Response:
-        session = request.cookies.get(self._cookie_name)
-        if session and session in self._sessions:
-            del self._sessions[session]
+        token = request.cookies.get(self._cookie_name)
+        expires_at = self._verify_token(token)
+        if expires_at is not None:
+            now = time.time()
+            self._revoked_tokens = {n: e for n, e in self._revoked_tokens.items() if e > now}
+            self._revoked_tokens[token.split(".")[1]] = expires_at
         response = self._ok({"message": "已退出登录"})
         response.del_cookie(self._cookie_name, path="/")
         return response
@@ -609,17 +659,21 @@ class WebServer:
         if not image:
             return self._err("图片不存在", 404)
         
-        image_url = image.get("file_path")
+        image_url = self.plugin._resolve_image_file(image.get("file_path") or "")
         if not image_url:
-            return self._err("图片路径不存在", 404)
+            return self._err("图片文件不存在", 404)
         
         try:
             result = await self.plugin.reanalyze_image(image_url)
+            if result.get("filter_result") == "错误":
+                return self._err(f"重新分析失败: {result.get('reason', '')}")
+            # VLM 返回的是纯文本角色名，需转为与入库一致的 JSON 数组；未识别则保留原角色
+            character = self.plugin._extract_vlm_character(result.get("character"))
             self.plugin.db.update_image(
                 image_id=image_id,
                 tags=result.get("tags"),
-                character=result.get("character"),
-                description=result.get("description"),
+                character=None if character == "[]" else character,
+                description=result.get("description") or None,
             )
             return self._ok({"result": result})
         except Exception as e:
@@ -631,18 +685,18 @@ class WebServer:
         if not image:
             return self._err("图片不存在", 404)
         
-        image_path = image.get("file_path")
+        image_path = self.plugin._resolve_image_file(image.get("file_path") or "")
         if not image_path:
-            return self._err("图片路径不存在", 404)
-        
+            return self._err("图片文件不存在", 404)
+
         try:
-            result = await self.plugin.analyze_image(image_path, None)
-            character = result.get("character", "[]")
-            
-            # 更新数据库
-            self.plugin.db.update_character(image_id, character)
-            
-            return self._ok({"result": result, "character": character})
+            result = await self.plugin.identify_characters(image_path)
+            character = result["character"]
+            if character == "[]":
+                return self._ok({"character": character, "source": "none", "message": "未识别到角色，保留原有数据"})
+            if not self.plugin.db.update_character(image_id, character):
+                return self._err("角色写入数据库失败")
+            return self._ok({"character": character, "source": result["source"]})
         except Exception as e:
             logger.error(f"[CollectImage WebUI] 角色识别失败: {e}")
             return self._err(f"角色识别失败: {e}")
@@ -1025,9 +1079,8 @@ class WebServer:
                 self.plugin.config.update(old_config)
                 raise
 
+            # 签名密钥绑定密码，修改密码会使所有旧 Cookie 失效
             password_changed = "webui_password" in updates
-            if password_changed:
-                self._sessions.clear()
 
             return self._ok({
                 "message": "配置已保存，部分设置需重启插件生效",

@@ -286,27 +286,14 @@ class CollectImagePlugin(Star):
                 saved_image_path = image_path
                 logger.info(f"[CollectImage] 图片已保存: {image_path}")
                 
-                # AnimeTrace 识别
-                char_result = await self.recognize_character_from_file(local_path)
-                all_results = char_result.get("all_results", [])
-                ai_detect = char_result.get("ai_detect", "")
-                
-                person_count = len(all_results)
-                confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+                ident = await self.identify_characters(local_path, result.get("character") or "", event)
+                character = ident["character"]
+                confirmed = ident["confirmed"]
+                ai_detect = ident["ai_detect"]
+                person_count = ident["person_count"]
+                confirmed_count = ident["confirmed_count"]
                 not_confident_count = person_count - confirmed_count
-                confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
-                
-                character = self._extract_characters(all_results)
-                # 如果 AnimeTrace 未识别出角色或接口异常，回退使用 VLM 识别结果
-                if not character or character == "[]":
-                    vlm_char_text = result.get("character")
-                    vlm_extracted = self._extract_vlm_character(vlm_char_text)
-                    if vlm_extracted != "[]":
-                        character = vlm_extracted
-                        logger.info(f"[CollectImage] AnimeTrace未匹配到角色，回退使用VLM识别角色: {character}")
-                # 更健壮的 ai_detect 类型检查
-                ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
-                
+
                 inserted = self.db.insert_image(
                     file_hash=file_hash,
                     file_path=image_path,
@@ -513,23 +500,13 @@ class CollectImagePlugin(Star):
             saved_image_path = image_path
             logger.info(f"[CollectImage] 转发图片已保存: {image_path}")
 
-            char_result = await self.recognize_character_from_file(tmp_path)
-            all_results = char_result.get("all_results", [])
-            ai_detect = char_result.get("ai_detect", "")
-
-            person_count = len(all_results)
-            confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+            ident = await self.identify_characters(tmp_path, result.get("character") or "", event)
+            character = ident["character"]
+            confirmed = ident["confirmed"]
+            ai_detect = ident["ai_detect"]
+            person_count = ident["person_count"]
+            confirmed_count = ident["confirmed_count"]
             not_confident_count = person_count - confirmed_count
-            confirmed = 1 if confirmed_count > 0 and not_confident_count == 0 else 0
-            character = self._extract_characters(all_results)
-            # 如果 AnimeTrace 未识别出角色或接口异常，回退使用 VLM 识别结果
-            if not character or character == "[]":
-                vlm_char_text = result.get("character")
-                vlm_extracted = self._extract_vlm_character(vlm_char_text)
-                if vlm_extracted != "[]":
-                    character = vlm_extracted
-                    logger.info(f"[CollectImage] 转发图片AnimeTrace未匹配到角色，回退使用VLM识别角色: {character}")
-            ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
 
             inserted = self.db.insert_image(
                 file_hash=file_hash,
@@ -1258,14 +1235,7 @@ class CollectImagePlugin(Star):
         except (json.JSONDecodeError, ValueError):
             matched_tags = {}
 
-        char_prompt = """请识别这张图片中的角色名称（如果有）。
-包括但不限于：动漫角色、游戏角色、原创角色等。
-如果无法确定具体角色名，请回答"未知"。
-只返回角色名，不要其他解释。"""
-        character = self._sanitize_generated_text(
-            await self._llm_generate_with_retry(provider_id, char_prompt, [image_url]),
-            200,
-        )
+        character = await self._vlm_recognize_character(provider_id, image_url)
 
         desc_prompt = "请用一句话描述这张图片的主要内容，不超过30字。"
         description = self._sanitize_generated_text(
@@ -1274,6 +1244,61 @@ class CollectImagePlugin(Star):
         )
 
         return {"tags": matched_tags, "character": character, "description": description}
+
+    async def _vlm_recognize_character(self, provider_id: str, image_url: str) -> str:
+        char_prompt = """请识别这张图片中的角色名称（如果有）。
+包括但不限于：动漫角色、游戏角色、原创角色等。
+如果无法确定具体角色名，请回答"未知"。
+只返回角色名，不要其他解释。"""
+        return self._sanitize_generated_text(
+            await self._llm_generate_with_retry(provider_id, char_prompt, [image_url]),
+            200,
+        )
+
+    async def identify_characters(
+        self,
+        file_path: str,
+        vlm_character_text: Optional[str] = None,
+        event: Optional[AstrMessageEvent] = None,
+    ) -> dict:
+        """AnimeTrace 识别角色，未命中时回退 VLM。入库流程与 WebUI 共用此方法。
+
+        vlm_character_text 为 None 时按需单独调用 VLM 识别角色。
+        """
+        char_result = await self.recognize_character_from_file(file_path)
+        all_results = char_result.get("all_results", []) or []
+        person_count = len(all_results)
+        confirmed_count = sum(1 for r in all_results if not r.get("not_confident", False))
+        confirmed = 1 if confirmed_count > 0 and confirmed_count == person_count else 0
+
+        character = self._extract_characters(all_results)
+        source = "animetrace"
+        if character == "[]":
+            if vlm_character_text is None:
+                try:
+                    provider_id = await self._get_provider_id(event)
+                    vlm_character_text = await self._vlm_recognize_character(provider_id, file_path)
+                except Exception as e:
+                    logger.warning(f"[CollectImage] VLM 角色识别失败: {e}")
+                    vlm_character_text = ""
+            vlm_extracted = self._extract_vlm_character(vlm_character_text)
+            if vlm_extracted != "[]":
+                character = vlm_extracted
+                source = "vlm"
+                logger.info(f"[CollectImage] AnimeTrace未匹配到角色，回退使用VLM识别角色: {character}")
+            else:
+                source = "none"
+
+        ai_detect = char_result.get("ai_detect", "")
+        ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
+        return {
+            "character": character,
+            "confirmed": confirmed,
+            "ai_detect": ai_detect,
+            "person_count": person_count,
+            "confirmed_count": confirmed_count,
+            "source": source,
+        }
 
     async def analyze_image(self, image_url: str, event: AstrMessageEvent) -> dict:
         try:
