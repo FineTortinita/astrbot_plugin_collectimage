@@ -1262,9 +1262,9 @@ class CollectImagePlugin(Star):
         vlm_character_text: Optional[str] = None,
         event: Optional[AstrMessageEvent] = None,
     ) -> dict:
-        """AnimeTrace 识别角色，未命中时回退 VLM。入库流程与 WebUI 共用此方法。
+        """AnimeTrace 识别角色，未命中或异常时回退 VLM。入库流程与 WebUI 共用此方法。
 
-        vlm_character_text 为 None 时按需单独调用 VLM 识别角色。
+        vlm_character_text 为空时按需单独调用 VLM 识别角色。
         """
         char_result = await self.recognize_character_from_file(file_path)
         all_results = char_result.get("all_results", []) or []
@@ -1275,10 +1275,14 @@ class CollectImagePlugin(Star):
         character = self._extract_characters(all_results)
         source = "animetrace"
         if character == "[]":
-            if vlm_character_text is None:
+            if not vlm_character_text or not str(vlm_character_text).strip():
                 try:
                     provider_id = await self._get_provider_id(event)
-                    vlm_character_text = await self._vlm_recognize_character(provider_id, file_path)
+                    if provider_id:
+                        vlm_character_text = await self._vlm_recognize_character(provider_id, file_path)
+                    else:
+                        logger.warning("[CollectImage] 未获取到可用 Provider ID，跳过 VLM 角色识别回退")
+                        vlm_character_text = ""
                 except Exception as e:
                     logger.warning(f"[CollectImage] VLM 角色识别失败: {e}")
                     vlm_character_text = ""
@@ -1286,9 +1290,18 @@ class CollectImagePlugin(Star):
             if vlm_extracted != "[]":
                 character = vlm_extracted
                 source = "vlm"
-                logger.info(f"[CollectImage] AnimeTrace未匹配到角色，回退使用VLM识别角色: {character}")
+                try:
+                    person_count = len(json.loads(vlm_extracted))
+                except Exception:
+                    person_count = 1
+                confirmed_count = 0
+                confirmed = 0
+                logger.info(f"[CollectImage] AnimeTrace识别失败或未匹配到角色，回退使用VLM识别角色: {character}")
             else:
                 source = "none"
+                person_count = 0
+                confirmed_count = 0
+                confirmed = 0
 
         ai_detect = char_result.get("ai_detect", "")
         ai_detect = "true" if str(ai_detect).lower() in ("true", "1", "yes") else "false"
@@ -1413,25 +1426,35 @@ class CollectImagePlugin(Star):
                     
                     # code=0 表示成功
                     if result.get("code") != 0:
-                        logger.error(f"[CollectImage] 角色识别失败: {result.get('code')}")
-                        return {"character": "未知", "ai_detect": str(result.get("code", "")), "all_results": []}
+                        code = result.get("code")
+                        msg = result.get("detail") or result.get("zh_message") or result.get("msg") or code
+                        logger.warning(f"[CollectImage] AnimeTrace 角色识别接口返回非零状态码: code={code}, msg={msg}，将回退至大模型视觉识别")
+                        return {"character": "未知", "ai_detect": f"code {code}", "all_results": []}
                     
                     # 获取原始结果
                     data = result.get("data", [])
                     ai_detect = str(result.get("ai", ""))
                     
-                    # 检查 data 是否为空
-                    if not data:
-                        logger.warning(f"[CollectImage] 角色识别成功但无结果 (data为空)")
+                    # 过滤掉异常 box (例如 AnimeTrace 报错时返回的 box_id == "error")
+                    valid_data = []
+                    for item in data:
+                        if item.get("box_id") == "error":
+                            logger.warning(f"[CollectImage] AnimeTrace 识别失败并返回错误框 (box_id=error): {item}")
+                            continue
+                        valid_data.append(item)
+                    
+                    # 检查 valid_data 是否为空
+                    if not valid_data:
+                        logger.warning("[CollectImage] AnimeTrace 无有效识别结果 (全部为错误框或数据为空)，将回退至大模型视觉识别")
                         return {"character": "未知", "ai_detect": ai_detect, "all_results": []}
                     
-                    logger.info(f"[CollectImage] 角色识别成功，共 {len(data)} 个结果, AI检测: {ai_detect}")
+                    logger.info(f"[CollectImage] 角色识别成功，共 {len(valid_data)} 个结果, AI检测: {ai_detect}")
                     
                     # API 调用后等待（频率控制）
                     anime_trace_delay = self._get_positive_int_config('anime_trace_delay', 3)
                     await asyncio.sleep(anime_trace_delay)
                     
-                    return {"character": "未知", "ai_detect": ai_detect, "all_results": data}
+                    return {"character": "未知", "ai_detect": ai_detect, "all_results": valid_data}
                     
         except Exception as e:
             logger.error(f"[CollectImage] 角色识别异常: {e}")
@@ -1491,8 +1514,11 @@ class CollectImagePlugin(Star):
             return "[]"
         
         characters = []
+        error_keywords = ("contact@animetrace.com", "animetrace.com", "当前无法识别", "无法识别", "请联系管理员")
         
         for item in all_results:
+            if item.get("box_id") == "error":
+                continue
             char_list = item.get("character", [])
             if not char_list:
                 continue
@@ -1502,13 +1528,17 @@ class CollectImagePlugin(Star):
             max_take = 2 if is_not_confident else 1
             
             for char_info in char_list[:max_take]:
-                char_name = char_info.get("character", "")
-                char_work = char_info.get("work", "")
-                if char_name:
-                    characters.append({
-                        "name": char_name,
-                        "work": char_work or ""
-                    })
+                char_name = str(char_info.get("character", "")).strip()
+                char_work = str(char_info.get("work", "")).strip()
+                if not char_name:
+                    continue
+                # 过滤包含错误文案的伪结果
+                if any(kw in char_name.lower() or kw in char_work.lower() for kw in error_keywords):
+                    continue
+                characters.append({
+                    "name": char_name,
+                    "work": char_work or ""
+                })
         
         if not characters:
             return "[]"

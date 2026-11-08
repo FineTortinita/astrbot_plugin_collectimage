@@ -217,6 +217,7 @@ import_bangumi.py
 aliases.json
 .oil-ui/
 .sisyphus/
+.archify/
 csv/
 web/stats_365.json
 
