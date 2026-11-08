@@ -190,11 +190,12 @@ class CollectImagePlugin(Star):
                     resolved = self._resolve_image_file(item.get("file_path"))
                     if not resolved:
                         continue
-                    phash = self._calculate_phash(resolved)
+                    # 图片解码是 CPU 密集操作，放到线程中执行，避免阻塞 AstrBot 事件循环
+                    phash = await asyncio.to_thread(self._calculate_phash, resolved)
                     if phash:
                         self.db.update_phash(item["id"], phash)
                         updated += 1
-                await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.02)
             logger.info(f"[CollectImage] 感知哈希补算完成，更新 {updated} 张")
         except Exception as e:
             logger.error(f"[CollectImage] 补算感知哈希失败: {e}")
@@ -255,14 +256,14 @@ class CollectImagePlugin(Star):
                 logger.info("[CollectImage] 图片尺寸过小，跳过")
                 return
             
-            file_hash = self._calculate_hash(local_path)
+            file_hash = await asyncio.to_thread(self._calculate_hash, local_path)
             
             if self.db.is_hash_exists(file_hash):
                 logger.info("[CollectImage] 图片已存在 (MD5)，跳过")
                 await self._reply_duplicate(event, group_id)
                 return
 
-            phash = self._calculate_phash(local_path)
+            phash = await asyncio.to_thread(self._calculate_phash, local_path)
             if phash and self._phash_dedup_enabled():
                 similar = self.db.find_similar_phash(phash, threshold=self._get_phash_threshold())
                 if similar:
@@ -465,7 +466,7 @@ class CollectImagePlugin(Star):
 
         try:
             tmp_path = await self._download_image_safely(image_url)
-            file_hash = self._calculate_hash(tmp_path)
+            file_hash = await asyncio.to_thread(self._calculate_hash, tmp_path)
 
             if self.db.is_hash_exists(file_hash):
                 logger.info("[CollectImage] 转发图片已存在 (MD5)，跳过")
@@ -479,7 +480,7 @@ class CollectImagePlugin(Star):
                 logger.info("[CollectImage] 转发图片尺寸过小，跳过")
                 return
 
-            phash = self._calculate_phash(tmp_path)
+            phash = await asyncio.to_thread(self._calculate_phash, tmp_path)
             if phash and self._phash_dedup_enabled():
                 similar = self.db.find_similar_phash(phash, threshold=self._get_phash_threshold())
                 if similar:
