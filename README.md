@@ -1,6 +1,6 @@
 # AstrBot 图片收集与智能归档插件 (`astrbot_plugin_collectimage`)
 
-一款专为 [AstrBot](https://github.com/Soulter/AstrBot) 设计的群聊二次元插画/动漫图片自动化收集、智能筛选、角色识别与结构化归档管理插件。支持 **JEV (System One) + 视觉大模型 (VLM)** 筛选、**AnimeTrace + VLM** 双重角色识别与自动回退、**中日文简繁别名检索**，并内置高可读性的现代化 **WebUI 审片工作台**。
+一款专为 [AstrBot](https://github.com/astrbotdevs/astrbot) 设计的群聊二次元插画/动漫图片自动化收集、智能筛选、角色识别与结构化归档管理插件。支持 **JEV (System One) + 视觉大模型 (VLM)** 筛选、**AnimeTrace + VLM** 双重角色识别与自动回退、**中日文简繁别名检索**，并内置高可读性的现代化 **WebUI 审片工作台**。
 
 ---
 
