@@ -500,9 +500,11 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
             conn.commit()
-            return True
         except Exception:
             return False
+        if self._phash_cache is not None:
+            self._phash_cache = [e for e in self._phash_cache if e[0] != image_id]
+        return True
 
     def cleanup_missing_files(self) -> int:
         """清理数据库中有记录但文件不存在的条目，返回清理数量"""

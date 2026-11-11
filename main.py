@@ -22,7 +22,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.event.filter import EventMessageType
 from astrbot.api.star import Context, Star, register, StarTools
-from astrbot.core.message.components import Image, Forward
+from astrbot.core.message.components import Image, Forward, Plain, Reply
 from astrbot.core.star.filter.command import GreedyStr
 
 from .database import Database
@@ -58,6 +58,41 @@ def _parse_moe_args(args: str) -> tuple[str, int]:
     return text, 1
 
 
+MOE_DELETE_MAX_IDS = 10
+# 引用图片匹配图库时的感知哈希阈值：比收图去重更严格，避免误删相似但不同的图片
+QUOTED_IMAGE_PHASH_THRESHOLD = 10
+_MOE_ID_PATTERN = re.compile(r"#(\d+)")
+
+
+def _parse_moe_delete_args(args: str) -> Optional[str]:
+    """若为 `/moe delete ...` 返回 delete 之后的参数文本，否则返回 None。"""
+    text = " ".join(str(args or "").split())
+    if text.startswith("/moe"):
+        text = text[4:].strip()
+    elif text.startswith("moe"):
+        text = text[3:].strip()
+    command, _, rest = text.partition(" ")
+    if command.lower() != "delete":
+        return None
+    return rest.strip()
+
+
+def _parse_image_ids(text: str) -> tuple[list[int], list[str]]:
+    """解析 `12 34,#56` 形式的编号列表，返回 (去重后的编号, 无法识别的片段)。"""
+    ids: list[int] = []
+    invalid: list[str] = []
+    for part in re.split(r"[\s,，、]+", text or ""):
+        token = part.strip().lstrip("#")
+        if not token:
+            continue
+        if token.isdigit() and int(token) > 0:
+            if int(token) not in ids:
+                ids.append(int(token))
+        else:
+            invalid.append(part)
+    return ids, invalid
+
+
 class PublicOnlyResolver(AbstractResolver):
     """Resolve hosts once and reject DNS answers containing non-public IPs."""
 
@@ -76,7 +111,7 @@ class PublicOnlyResolver(AbstractResolver):
         await self._resolver.close()
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.9.1")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.10.0")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -1544,21 +1579,160 @@ class CollectImagePlugin(Star):
             return "[]"
         return json.dumps(characters, ensure_ascii=False)
 
+    def _delete_collected_image(self, image_id: int) -> Optional[dict]:
+        """删除图库中的图片记录及文件，返回被删除的记录；不存在返回 None。"""
+        image = self.db.get_image_by_id(image_id)
+        if not image:
+            return None
+        resolved = self._resolve_image_file(image.get("file_path"))
+        if resolved:
+            try:
+                os.remove(resolved)
+            except OSError as e:
+                logger.warning(f"[CollectImage] 删除图片文件失败: {resolved}, {e}")
+        if not self.db.delete_image(image_id):
+            return None
+        logger.info(f"[CollectImage] 已通过聊天指令删除图片 id={image_id}")
+        return image
+
+    async def _match_quoted_image_file(self, file_path: str) -> Optional[int]:
+        """按 MD5 精确匹配，失败后按严格阈值的感知哈希匹配图库图片。"""
+        file_hash = await asyncio.to_thread(self._calculate_hash, file_path)
+        image = self.db.get_image_by_hash(file_hash)
+        if image:
+            return image["id"]
+        phash = await asyncio.to_thread(self._calculate_phash, file_path)
+        if phash:
+            similar = self.db.find_similar_phash(phash, threshold=QUOTED_IMAGE_PHASH_THRESHOLD)
+            if similar:
+                return similar["id"]
+        return None
+
+    async def _match_quoted_image_segment(self, segment: object) -> Optional[int]:
+        local_path = cleanup_path = None
+        try:
+            if isinstance(segment, Image):
+                local_path, cleanup_path = await self._get_single_image_file_path(segment)
+            elif isinstance(segment, dict) and segment.get("type") == "image":
+                data = segment.get("data") or {}
+                url = data.get("url") or data.get("file") or ""
+                if url.startswith(("http://", "https://")):
+                    local_path = cleanup_path = await self._download_image_safely(url)
+            if not local_path:
+                return None
+            return await self._match_quoted_image_file(local_path)
+        except Exception as e:
+            logger.warning(f"[CollectImage] 匹配引用图片失败: {e}")
+            return None
+        finally:
+            if cleanup_path and os.path.exists(cleanup_path):
+                try:
+                    os.remove(cleanup_path)
+                except OSError as e:
+                    logger.debug(f"[CollectImage] 清理引用图片临时文件失败: {cleanup_path}, {e}")
+
+    async def _get_quoted_segments(self, event: AstrMessageEvent, reply: Reply) -> list:
+        """取被引用消息的消息段；适配器未带 chain 时通过 get_msg 补取。"""
+        if reply.chain:
+            return list(reply.chain)
+        bot = getattr(event, "bot", None)
+        if not reply.id or not bot or not hasattr(bot, "api"):
+            return []
+        try:
+            result = await bot.api.call_action("get_msg", message_id=int(reply.id))
+        except Exception as e:
+            logger.warning(f"[CollectImage] 获取被引用消息失败: id={reply.id}, {e}")
+            return []
+        message = result.get("message") if isinstance(result, dict) else None
+        return message if isinstance(message, list) else []
+
+    async def _find_quoted_image_ids(self, event: AstrMessageEvent) -> tuple[bool, list[int]]:
+        """返回 (是否引用了图片/编号消息, 匹配到的图库编号列表)。"""
+        found_any = False
+        ids: list[int] = []
+        for reply in (m for m in event.get_messages() if isinstance(m, Reply)):
+            segments = await self._get_quoted_segments(event, reply)
+            texts = [reply.message_str or ""]
+            for segment in segments:
+                if isinstance(segment, Plain):
+                    texts.append(segment.text or "")
+                elif isinstance(segment, dict) and segment.get("type") == "text":
+                    texts.append(str((segment.get("data") or {}).get("text") or ""))
+                elif self._processed_message_type(segment) in ("Image", "dict.image"):
+                    found_any = True
+                    image_id = await self._match_quoted_image_segment(segment)
+                    if image_id and image_id not in ids:
+                        ids.append(image_id)
+            # 机器人 /moe 发出的消息带有 #编号，可作为兜底
+            for match in set(_MOE_ID_PATTERN.findall(" ".join(texts))):
+                found_any = True
+                if int(match) not in ids:
+                    ids.append(int(match))
+        return found_any, ids
+
+    async def _handle_moe_delete(self, event: AstrMessageEvent, rest: str):
+        if not event.is_admin():
+            yield event.plain_result("仅管理员可删除图片").stop_event()
+            return
+
+        usage = "用法：引用图片消息发送 /moe delete，或 /moe delete <编号> [编号...]"
+        if rest:
+            image_ids, invalid = _parse_image_ids(rest)
+            if invalid or not image_ids:
+                yield event.plain_result(f"无法识别的编号：{' '.join(invalid) or rest}\n{usage}").stop_event()
+                return
+        else:
+            quoted, image_ids = await self._find_quoted_image_ids(event)
+            if not quoted:
+                yield event.plain_result(usage).stop_event()
+                return
+            if not image_ids:
+                yield event.plain_result("被引用的图片不在图库中").stop_event()
+                return
+
+        if len(image_ids) > MOE_DELETE_MAX_IDS:
+            yield event.plain_result(f"单次最多删除 {MOE_DELETE_MAX_IDS} 张图片").stop_event()
+            return
+
+        deleted, missing = [], []
+        for image_id in image_ids:
+            (deleted if self._delete_collected_image(image_id) else missing).append(image_id)
+
+        parts = []
+        if deleted:
+            parts.append("已删除 " + "、".join(f"#{i}" for i in deleted))
+        if missing:
+            parts.append("未找到 " + "、".join(f"#{i}" for i in missing))
+        yield event.plain_result("；".join(parts)).stop_event()
+
+    def _moe_image_result(self, event: AstrMessageEvent, img: dict):
+        return event.chain_result([
+            Image.fromFileSystem(img["file_path"]),
+            Plain(f"#{img['id']}"),
+        ]).stop_event()
+
     @filter.command("moe", alias={"/moe"})
     async def moe(self, event: AstrMessageEvent, args: GreedyStr):
-        """搜索角色或标签的图片（模糊匹配+随机）"""
-        kw, count = _parse_moe_args(args)
+        """搜索角色或标签的图片（模糊匹配+随机）；/moe delete 删除图片"""
         event.stop_event()
-        
+
+        delete_args = _parse_moe_delete_args(args)
+        if delete_args is not None:
+            async for result in self._handle_moe_delete(event, delete_args):
+                yield result
+            return
+
+        kw, count = _parse_moe_args(args)
+
         if not kw:
             results = self.db.search_all_random_with_alias(keyword="", limit=1)
             if not results:
                 yield event.plain_result("暂无图片").stop_event()
                 return
             for img in results:
-                yield event.image_result(img["file_path"]).stop_event()
+                yield self._moe_image_result(event, img)
             return
-        
+
         if kw == "stats":
             total = self.db.count_images()
             yield event.plain_result(f"📊 图片收集统计\n\n共收集 {total} 张图片").stop_event()
@@ -1582,7 +1756,7 @@ class CollectImagePlugin(Star):
             return
 
         for img in results:
-            yield event.image_result(img["file_path"]).stop_event()
+            yield self._moe_image_result(event, img)
 
     async def terminate(self):
         if self._init_task and not self._init_task.done():
