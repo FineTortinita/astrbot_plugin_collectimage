@@ -197,6 +197,9 @@ button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
 .cel-desk-layout>.retro-window:first-child{border:0;box-shadow:none;padding:0;background:transparent}
 .toolbar-well{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:0 0 16px;margin-bottom:0}
 .toolbar-well>div{max-width:100%;flex-wrap:wrap}
+.image-toolbar-sticky{position:sticky;top:0;z-index:20;margin:0;padding:10px 0 0;background:var(--dp-color-ground);border-bottom:1px solid transparent;transition:border-color 120ms ease-out,box-shadow 120ms ease-out}
+.image-toolbar-sticky.is-stuck{border-bottom-color:var(--dp-color-rule);box-shadow:0 6px 12px -8px rgba(15,23,42,.18)}
+.image-toolbar-sticky>.toolbar-well{padding-bottom:12px}
 .search-bar-group{display:flex;align-items:center;gap:8px;flex:1;min-width:240px}
 .search-bar-group label{display:none}.search-bar-group input{width:100%;flex:1}
 .toolbar-well:has(.search-bar-group)>div:last-child{display:none!important}

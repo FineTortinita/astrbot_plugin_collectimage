@@ -1,0 +1,107 @@
+name: Auto Release
+
+# 推送到 master 时，若 metadata.yaml 中的 version 尚无对应 tag，则自动打 tag 并发布 Release。
+# 发版方式：修改 metadata.yaml 与 main.py @register 中的版本号后 push 到 master 即可。
+on:
+  push:
+    branches: [master]
+    paths:
+      - metadata.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(grep -E '^version:' metadata.yaml | head -n1 | sed -E 's/^version:[[:space:]]*//; s/[[:space:]"'\'']//g')
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error file=metadata.yaml::版本号格式无效: '$version'（应为 vX.Y.Z）"
+            exit 1
+          fi
+          register_version=$(grep -oE '@register\([^)]*\)' main.py | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+[^"'\'']*' | head -n1 || true)
+          if [[ "$register_version" != "$version" ]]; then
+            echo "::error file=main.py::main.py @register 版本 ($register_version) 与 metadata.yaml ($version) 不一致"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::tag $version 已存在，跳过发版"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Syntax check
+        if: steps.version.outputs.exists == 'false'
+        run: |
+          python3 -m py_compile main.py web_server.py database.py
+          python3 -c "import json; json.load(open('_conf_schema.json', encoding='utf-8'))"
+          node --check web/app.js
+
+      - name: Build release notes
+        if: steps.version.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null || true)
+          range=${prev:+$prev..HEAD}
+          {
+            echo "## $VERSION"
+            echo
+            for kind in "feat:✨ 新功能" "fix:🐛 修复" "perf:⚡ 性能" "refactor:♻️ 重构" "docs:📝 文档"; do
+              prefix=${kind%%:*}; title=${kind#*:}
+              lines=$(git log --no-merges --format='%s' $range | grep -E "^${prefix}(\(.+\))?!?:" | sed -E "s/^${prefix}(\(.+\))?!?:[[:space:]]*/- /" || true)
+              if [[ -n "$lines" ]]; then
+                echo "### $title"; echo; echo "$lines"; echo
+              fi
+            done
+            others=$(git log --no-merges --format='%s' $range | grep -vE '^(feat|fix|perf|refactor|docs)(\(.+\))?!?:' | sed 's/^/- /' || true)
+            if [[ -n "$others" ]]; then
+              echo "### 其他"; echo; echo "$others"; echo
+            fi
+            if [[ -n "$prev" ]]; then
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev}...${VERSION}"
+            fi
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Package plugin
+        if: steps.version.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          name=astrbot_plugin_collectimage
+          git archive --format=zip --prefix="$name/" -o "${name}-${VERSION}.zip" HEAD -- \
+            main.py web_server.py database.py metadata.yaml _conf_schema.json \
+            tags_library.json config.json.example README.md LICENSE web
+          unzip -l "${name}-${VERSION}.zip"
+
+      - name: Create release
+        if: steps.version.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes-file RELEASE_NOTES.md \
+            "astrbot_plugin_collectimage-${VERSION}.zip"
