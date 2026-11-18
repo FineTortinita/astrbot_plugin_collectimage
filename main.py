@@ -111,7 +111,7 @@ class PublicOnlyResolver(AbstractResolver):
         await self._resolver.close()
 
 
-@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.10.0")
+@register("astrbot_plugin_collectimage", "FineTortinita", "群聊图片收集插件", "v1.11.0")
 class CollectImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
