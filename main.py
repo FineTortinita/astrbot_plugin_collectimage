@@ -1419,81 +1419,159 @@ class CollectImagePlugin(Star):
                 "description": ""
             }
 
-    async def recognize_character(self, image_url: Optional[str] = None, image_base64: Optional[str] = None) -> dict:
-        """调用 AnimeTrace API 识别角色，返回完整结果"""
+    # ---------------- AnimeTrace 调用：全局节流 + 重试 + 熔断冷却 ----------------
+    _ANIME_TRACE_URL = 'https://api.animetrace.com/v1/search'
+    _ANIME_TRACE_BUSY_KEYWORDS = ("频繁", "繁忙", "限流", "稍后", "busy", "limit", "too many", "rate")
+
+    def _get_nonneg_int_config(self, key: str, default: int) -> int:
+        try:
+            value = getattr(self.config, key, None)
+            if value is None and hasattr(self.config, 'get'):
+                value = self.config.get(key, default)
+            if isinstance(value, bool) or value is None:
+                return default
+            return max(0, int(str(value).strip()))
+        except Exception:
+            return default
+
+    def _anime_trace_state(self) -> dict:
+        state = getattr(self, "_anime_trace_rt", None)
+        if state is None:
+            state = {"lock": asyncio.Lock(), "last_request": 0.0, "cooldown_until": 0.0}
+            self._anime_trace_rt = state
+        return state
+
+    async def _anime_trace_post_once(self, form_fields: dict) -> tuple:
+        """发送一次请求。返回 (kind, payload, retry_after)。
+
+        kind: ok / rate_limited / retryable / fatal
+        """
+        form = aiohttp.FormData()
+        for k, v in form_fields.items():
+            form.add_field(k, v)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Origin': 'https://ai.animedb.cn',
+            'Referer': 'https://ai.animedb.cn/',
+            'Accept': 'application/json, text/plain, */*',
+        }
+        timeout_s = self._get_positive_int_config('anime_trace_timeout', 30)
         try:
             async with aiohttp.ClientSession() as session:
-                form = aiohttp.FormData()
-                
-                # 优先使用 base64，其次使用 url
-                if image_base64:
-                    form.add_field('base64', image_base64)
-                elif image_url:
-                    form.add_field('url', image_url)
-                else:
-                    logger.error("[CollectImage] 角色识别缺少图片输入")
-                    return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
-                
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Origin': 'https://ai.animedb.cn',
-                    'Referer': 'https://ai.animedb.cn/',
-                    'Accept': 'application/json, text/plain, */*',
-                }
-                form.add_field('model', 'animetrace-yuri-4.2')
-                form.add_field('is_multi', '1')
-                form.add_field('ai_detect', '1')
-                
                 async with session.post(
-                    'https://api.animetrace.com/v1/search', 
+                    self._ANIME_TRACE_URL,
                     data=form,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15)
+                    timeout=aiohttp.ClientTimeout(total=timeout_s),
                 ) as resp:
                     if resp.status == 429:
-                        logger.warning("[CollectImage] AnimeTrace API 触发频率限制 (HTTP 429)，将回退至大模型视觉识别")
-                        return {"character": "未知", "ai_detect": "限流", "all_results": []}
-                    elif resp.status != 200:
-                        logger.warning(f"[CollectImage] 角色识别请求返回 HTTP: {resp.status}，将回退至大模型视觉识别")
-                        return {"character": "未知", "ai_detect": f"HTTP {resp.status}", "all_results": []}
-                    
-                    result = await resp.json()
-                    
-                    # code=0 表示成功
-                    if result.get("code") != 0:
-                        code = result.get("code")
-                        msg = result.get("detail") or result.get("zh_message") or result.get("msg") or code
-                        logger.warning(f"[CollectImage] AnimeTrace 角色识别接口返回非零状态码: code={code}, msg={msg}，将回退至大模型视觉识别")
-                        return {"character": "未知", "ai_detect": f"code {code}", "all_results": []}
-                    
-                    # 获取原始结果
-                    data = result.get("data", [])
-                    ai_detect = str(result.get("ai", ""))
-                    
-                    # 过滤掉异常 box (例如 AnimeTrace 报错时返回的 box_id == "error")
-                    valid_data = []
-                    for item in data:
-                        if item.get("box_id") == "error":
-                            logger.warning(f"[CollectImage] AnimeTrace 识别失败并返回错误框 (box_id=error): {item}")
-                            continue
-                        valid_data.append(item)
-                    
-                    # 检查 valid_data 是否为空
-                    if not valid_data:
-                        logger.warning("[CollectImage] AnimeTrace 无有效识别结果 (全部为错误框或数据为空)，将回退至大模型视觉识别")
-                        return {"character": "未知", "ai_detect": ai_detect, "all_results": []}
-                    
-                    logger.info(f"[CollectImage] 角色识别成功，共 {len(valid_data)} 个结果, AI检测: {ai_detect}")
-                    
-                    # API 调用后等待（频率控制）
-                    anime_trace_delay = self._get_positive_int_config('anime_trace_delay', 3)
-                    await asyncio.sleep(anime_trace_delay)
-                    
-                    return {"character": "未知", "ai_detect": ai_detect, "all_results": valid_data}
-                    
-        except Exception as e:
-            logger.error(f"[CollectImage] 角色识别异常: {e}")
+                        try:
+                            retry_after = float(resp.headers.get('Retry-After', 0) or 0)
+                        except (TypeError, ValueError):
+                            retry_after = 0.0
+                        return "rate_limited", "HTTP 429", retry_after
+                    if resp.status >= 500 or resp.status in (408, 425):
+                        return "retryable", f"HTTP {resp.status}", 0.0
+                    if resp.status != 200:
+                        return "fatal", f"HTTP {resp.status}", 0.0
+                    try:
+                        result = await resp.json(content_type=None)
+                    except Exception:
+                        text = (await resp.text())[:200]
+                        return "retryable", f"非 JSON 响应: {text!r}", 0.0
+        except asyncio.TimeoutError:
+            return "retryable", f"请求超时 ({timeout_s}s)", 0.0
+        except aiohttp.ClientError as e:
+            return "retryable", f"网络错误: {e}", 0.0
+
+        if not isinstance(result, dict):
+            return "retryable", f"响应格式异常: {str(result)[:200]}", 0.0
+
+        code = result.get("code")
+        if code != 0:
+            msg = str(result.get("detail") or result.get("zh_message") or result.get("msg") or code)
+            if any(kw in msg.lower() for kw in self._ANIME_TRACE_BUSY_KEYWORDS):
+                return "rate_limited", f"code={code}, msg={msg}", 0.0
+            return "fatal", f"code={code}, msg={msg}", 0.0
+
+        data = result.get("data", []) or []
+        valid_data = [item for item in data if isinstance(item, dict) and item.get("box_id") != "error"]
+        error_boxes = len(data) - len(valid_data)
+        if not valid_data and error_boxes:
+            # AnimeTrace 在限流 / 匿名额度耗尽时会返回 code=0 + box_id=error 的伪结果
+            return "rate_limited", f"返回 {error_boxes} 个错误框 (box_id=error): {data[0]}", 0.0
+        return "ok", {"ai": str(result.get("ai", "")), "data": valid_data}, 0.0
+
+    async def recognize_character(self, image_url: Optional[str] = None, image_base64: Optional[str] = None) -> dict:
+        """调用 AnimeTrace API 识别角色，返回完整结果。
+
+        - 全局串行 + 最小请求间隔（anime_trace_delay），无论成败都计入间隔；
+        - 429 / 错误框 / 繁忙 / 超时 / 5xx 指数退避重试（anime_trace_max_retries）；
+        - 重试耗尽仍被限流则进入熔断冷却（anime_trace_cooldown），冷却期内直接回退 VLM。
+        """
+        if image_base64:
+            fields = {'base64': image_base64}
+        elif image_url:
+            fields = {'url': image_url}
+        else:
+            logger.error("[CollectImage] 角色识别缺少图片输入")
             return {"character": "未知", "ai_detect": "识别失败", "all_results": []}
+        fields.update({'model': 'animetrace-yuri-4.2', 'is_multi': '1', 'ai_detect': '1'})
+
+        state = self._anime_trace_state()
+        min_interval = self._get_positive_int_config('anime_trace_delay', 3)
+        max_retries = min(self._get_nonneg_int_config('anime_trace_max_retries', 2), 5)
+        cooldown = self._get_nonneg_int_config('anime_trace_cooldown', 120)
+
+        async with state["lock"]:
+            now = time.monotonic()
+            if now < state["cooldown_until"]:
+                remain = int(state["cooldown_until"] - now)
+                logger.info(f"[CollectImage] AnimeTrace 处于限流冷却中（剩余 {remain}s），直接回退大模型视觉识别")
+                return {"character": "未知", "ai_detect": "冷却中", "all_results": []}
+
+            last_kind, last_detail = "fatal", ""
+            for attempt in range(max_retries + 1):
+                wait = state["last_request"] + min_interval - time.monotonic()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                try:
+                    kind, payload, retry_after = await self._anime_trace_post_once(fields)
+                except Exception as e:
+                    kind, payload, retry_after = "fatal", f"异常: {e}", 0.0
+                state["last_request"] = time.monotonic()
+                last_kind, last_detail = kind, payload
+
+                if kind == "ok":
+                    valid_data = payload["data"]
+                    ai_detect = payload["ai"]
+                    if not valid_data:
+                        logger.info("[CollectImage] AnimeTrace 未检测到角色 (data 为空)，将回退至大模型视觉识别")
+                    else:
+                        logger.info(f"[CollectImage] 角色识别成功，共 {len(valid_data)} 个结果, AI检测: {ai_detect}")
+                    return {"character": "未知", "ai_detect": ai_detect, "all_results": valid_data}
+
+                if kind == "fatal" or attempt >= max_retries:
+                    break
+
+                if kind == "rate_limited":
+                    backoff = min_interval * (2 ** (attempt + 1))
+                else:
+                    backoff = min_interval * (attempt + 1)
+                backoff = min(max(backoff, retry_after), 60) + random.uniform(0, 1)
+                logger.warning(
+                    f"[CollectImage] AnimeTrace {'被限流' if kind == 'rate_limited' else '请求失败'}: {payload}，"
+                    f"{backoff:.1f}s 后第 {attempt + 1}/{max_retries} 次重试"
+                )
+                await asyncio.sleep(backoff)
+
+            if last_kind == "rate_limited" and cooldown > 0:
+                state["cooldown_until"] = time.monotonic() + cooldown
+                logger.warning(f"[CollectImage] AnimeTrace 持续限流: {last_detail}，暂停调用 {cooldown}s，期间回退大模型视觉识别")
+            else:
+                logger.warning(f"[CollectImage] AnimeTrace 识别失败: {last_detail}，将回退至大模型视觉识别")
+            label = "限流" if last_kind == "rate_limited" else "识别失败"
+            return {"character": "未知", "ai_detect": label, "all_results": []}
 
     async def recognize_character_from_file(self, file_path: str) -> dict:
         """从本地文件识别角色（使用 base64 上传），图片过大时自动压缩"""

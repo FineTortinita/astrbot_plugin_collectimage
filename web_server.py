@@ -1007,6 +1007,10 @@ class WebServer:
                 "webui_port": (1, 65535),
                 "jpeg_quality": (1, 100),
                 "duplicate_reply_probability": (0, 100),
+                "anime_trace_delay": (1, 600),
+                "anime_trace_max_retries": (0, 5),
+                "anime_trace_cooldown": (0, 86400),
+                "anime_trace_timeout": (5, 300),
             }
             minimum, maximum = bounds.get(key, (1, 1_000_000_000))
             if not minimum <= value <= maximum:

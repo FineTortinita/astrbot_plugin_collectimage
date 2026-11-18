@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>图片收集管理器</title>
-    <link rel="stylesheet" href="/web/software.css?v=20261108-batch">
+    <link rel="stylesheet" href="/web/software.css?v=20261118-sticky">
 </head>
 <body>
     <div id="toast-stack" aria-live="polite"></div>
@@ -150,6 +150,8 @@
                                     <span id="grid-status-hint" style="font-family: var(--dp-typography-mono); font-size: 11px;">MODE: ALL_FRAMES</span>
                                 </div>
 
+                                <!-- 搜索 + 批量操作：滚动时吸顶 -->
+                                <div class="image-toolbar-sticky">
                                 <!-- 搜索与快捷别名栏 -->
                                 <div class="toolbar-well">
                                     <div class="search-bar-group">
@@ -175,6 +177,7 @@
                                         <button id="select-all-btn" class="retro-key" type="button">全选已加载</button>
                                         <button id="batch-clear-btn" class="retro-key" type="button">清空选择</button>
                                     </div>
+                                </div>
                                 </div>
 
                                 <!-- 图片列表井 (滚动动态加载) -->
@@ -611,6 +614,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="/web/app.js?v=20261108-batch"></script>
+    <script src="/web/app.js?v=20261118-sticky"></script>
 </body>
 </html>

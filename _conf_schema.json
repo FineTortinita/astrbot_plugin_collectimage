@@ -124,6 +124,26 @@
     "type": "int",
     "default": 24
   },
+  "anime_trace_delay": {
+    "description": "AnimeTrace 两次请求之间的最小间隔（秒）。所有入库与 WebUI 识别请求全局串行并共享此间隔，失败请求同样计入。匿名接口限流较严，推荐 3-6 秒。",
+    "type": "int",
+    "default": 3
+  },
+  "anime_trace_max_retries": {
+    "description": "AnimeTrace 被限流（HTTP 429 / 返回错误框 / 提示繁忙）、超时或 5xx 时的最大重试次数（0-5）。限流按间隔×2^n 指数退避，最长 60 秒。",
+    "type": "int",
+    "default": 2
+  },
+  "anime_trace_cooldown": {
+    "description": "AnimeTrace 重试耗尽仍被限流时的熔断冷却时间（秒）。冷却期内不再请求 AnimeTrace，直接回退 VLM 识别角色，避免持续触发限流。设为 0 关闭熔断。",
+    "type": "int",
+    "default": 120
+  },
+  "anime_trace_timeout": {
+    "description": "AnimeTrace 单次请求超时时间（秒）。多人物图片识别较慢，过短会频繁超时，推荐 20-40 秒。",
+    "type": "int",
+    "default": 30
+  },
   "jev_filter_enabled": {
     "description": "启用 jev (Experiential Labs System One) 图片有效/无效判定。开启前需配置 jev_filter_api_key。未配置或接口异常时自动回退原 LLM 筛选。",
     "type": "bool",

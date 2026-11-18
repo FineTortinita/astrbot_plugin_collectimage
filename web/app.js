@@ -285,6 +285,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     bindEventListeners();
     setupInfiniteScroll();
+    setupStickyToolbar();
     safeRefreshIcons();
     await checkAuth();
 });
@@ -518,7 +519,7 @@ function bindEventListeners() {
                 if (data.success) {
                     detailDirty = false;
                     showToast('角色与描述已保存', 'success');
-                    loadImages();
+                    await refreshImagesInPlace();
                 } else {
                     showToast('保存失败: ' + data.error, 'error');
                 }
@@ -584,8 +585,7 @@ function bindEventListeners() {
 
                 if (data.success) {
                     showToast('重新分析完成', 'success');
-                    await openDetail(currentImageId);
-                    loadImages();
+                    await refreshImagesInPlace();
                 } else {
                     showToast('重新分析失败: ' + data.error, 'error');
                 }
@@ -651,8 +651,9 @@ function bindEventListeners() {
                 if (data.success) {
                     showToast('删除成功', 'success');
                     if (detailModal) detailModal.classList.add('hidden');
+                    const deletedIndex = currentLoadedImages.findIndex(x => x.id === currentImageId);
                     currentImageId = null;
-                    loadImages();
+                    await refreshImagesInPlace({ preferIndex: deletedIndex });
                     refreshMonitorFacts();
                 } else {
                     showToast('删除失败: ' + data.error, 'error');
@@ -1298,6 +1299,81 @@ async function loadImages(append = false) {
     }
 }
 
+// 命令操作后原地刷新：保留已加载数量、滚动位置与当前选中图片，不回到顶部
+async function refreshImagesInPlace({ preferIndex = -1 } = {}) {
+    const scrollY = window.scrollY;
+    const want = Math.max(currentLoadedImages.length, calculatePageSize());
+    const requestRevision = ++listRevision;
+    detailRevision++;
+    isLoadingMore = true;
+
+    const baseParams = new URLSearchParams();
+    if (currentFilter === 'confirmed') baseParams.append('confirmed', '1');
+    else if (currentFilter === 'unconfirmed') baseParams.append('confirmed', '0');
+    const useSearch = isSearchMode && currentSearchKeyword;
+    if (useSearch) baseParams.append('keyword', currentSearchKeyword);
+
+    try {
+        let all = [];
+        let total = 0;
+        // 服务端单次返回有上限（max_api_images），按块拉取直到恢复原有数量
+        while (all.length < want) {
+            const params = new URLSearchParams(baseParams);
+            params.append('limit', want - all.length);
+            params.append('offset', all.length);
+            const res = await fetch(`${API_BASE}/api/images${useSearch ? '/search' : ''}?${params}`);
+            const data = await res.json();
+            if (requestRevision !== listRevision) return;
+            if (!res.ok || !data.success) throw new Error(data.error || '加载失败');
+            total = data.total;
+            const fetched = data.images || [];
+            const seen = new Set(all.map(x => x.id));
+            all = all.concat(fetched.filter(x => !seen.has(x.id)));
+            if (!fetched.length || all.length >= total) break;
+        }
+        totalImages = total;
+        currentLoadedImages = all;
+        renderImages(all, false);
+        window.scrollTo({ top: scrollY, behavior: 'instant' });
+
+        if (!all.length) {
+            currentImageId = null;
+            clearInspector();
+        } else {
+            let target = all.some(x => x.id === currentImageId) ? currentImageId : null;
+            if (target !== null && detailDirty) {
+                // 检片槽有未保存编辑：只刷新列表，不覆盖输入内容
+                imageGrid.querySelector(`.image-card[data-id="${target}"]`)?.classList.add('active-cel');
+                setInspectorEnabled(true);
+            } else {
+                if (target === null) target = all[Math.min(Math.max(preferIndex, 0), all.length - 1)].id;
+                detailDirty = false;
+                await openDetail(target);
+            }
+        }
+        currentPage = Math.floor(all.length / Math.max(1, pageSize));
+        updatePagination();
+    } catch (e) {
+        showToast('刷新图片列表失败: ' + e.message, 'error');
+    } finally {
+        if (requestRevision === listRevision) isLoadingMore = false;
+        updateScrollSentinelUI();
+    }
+}
+
+function setupStickyToolbar() {
+    const bar = document.querySelector('.image-toolbar-sticky');
+    if (!bar || typeof IntersectionObserver === 'undefined') return;
+    // 工具栏前放置 1px 哨兵，哨兵离开视口即表示工具栏已吸顶，用于显示分隔阴影
+    const sentinel = document.createElement('div');
+    sentinel.setAttribute('aria-hidden', 'true');
+    sentinel.style.cssText = 'height:1px;margin-bottom:-1px;';
+    bar.before(sentinel);
+    new IntersectionObserver(([entry]) => {
+        bar.classList.toggle('is-stuck', !entry.isIntersecting && entry.boundingClientRect.top < 0);
+    }).observe(sentinel);
+}
+
 // 搜索图片（支持别名匹配）
 async function searchImagesWithAlias(keyword) {
     currentSearchKeyword = keyword;
@@ -1616,8 +1692,9 @@ async function handleBatchAction(action) {
         } else if (action === 'reanalyze') {
             await runBatchPerImage(ids, 'VLM 重分析', 'reanalyze');
         }
+        const firstIndex = currentLoadedImages.findIndex(x => ids.includes(x.id));
         selectedImages.clear();
-        await loadImages();
+        await refreshImagesInPlace({ preferIndex: firstIndex });
         refreshMonitorFacts();
     } catch (e) {
         showToast('操作失败: ' + (e.message || e), 'error');
@@ -1848,6 +1925,12 @@ const CONFIG_CATEGORIES = [
         name: 'AI 视觉与筛选模型',
         desc: '配置 VLM 识图开关、筛选提示词与 JEV System One 判定',
         keys: ['enable_llm_filter', 'enable_llm_content', 'llm_provider_id', 'filter_prompt', 'jev_filter_enabled', 'jev_filter_api_key', 'jev_filter_api_base', 'jev_filter_model', 'jev_filter_threshold']
+    },
+    {
+        id: 'anime_trace',
+        name: 'AnimeTrace 角色识别',
+        desc: '控制 AnimeTrace 请求间隔、限流重试、熔断冷却与超时',
+        keys: ['anime_trace_delay', 'anime_trace_max_retries', 'anime_trace_cooldown', 'anime_trace_timeout']
     },
     {
         id: 'storage_perf',
